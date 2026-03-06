@@ -869,7 +869,6 @@ const EJECTED_PROP_FADE_DURATION = 8;
 const HQ_SHELL_LANDING_Y = 1.62;
 
 const enemyGeometry = new THREE.SphereGeometry(6.5, 12, 12);
-const deathExplosionParticleGeometry = new THREE.SphereGeometry(0.95, 6, 6);
 const enemyMaterial = new THREE.MeshStandardMaterial({ color: 0x84dd68, roughness: 0.75 });
 const bulletGeometry = new THREE.SphereGeometry(1.7, 8, 8);
 const playerBulletMaterial = new THREE.MeshBasicMaterial({ color: 0xff8f57 });
@@ -2985,23 +2984,53 @@ function spawnImpactEffect(x, z, radius, colorHex, maxLife = 0.24, baseOpacity =
 }
 
 function spawnCannonBlastEffect(x, z, radius) {
-  spawnImpactEffect(x, z, Math.max(10, radius * 0.9), 0xff2a2a, 0.36, 0.94);
-  spawnImpactEffect(x, z, Math.max(12, radius * 1.18), 0xb00808, 0.52, 0.62);
+  // Keep only a subtle dark shockwave under the chunk burst.
+  spawnImpactEffect(x, z, Math.max(9.5, radius * 0.95), 0x282524, 0.28, 0.28);
 
-  const flash = new THREE.Mesh(
-    new THREE.CircleGeometry(Math.max(6.5, radius * 0.52), 30),
-    new THREE.MeshBasicMaterial({
-      color: 0xff4f3b,
-      transparent: true,
-      opacity: 0.7,
-      depthWrite: false,
-      side: THREE.DoubleSide,
-    })
-  );
-  flash.rotation.x = -Math.PI / 2;
-  flash.position.set(x, 0.21, z);
-  scene.add(flash);
-  impactEffects.push({ mesh: flash, life: 0.16, maxLife: 0.16, growth: 1.9, baseOpacity: 0.7 });
+  const shardGeometryFactories = [
+    () => new THREE.TetrahedronGeometry(0.95),
+    () => new THREE.CylinderGeometry(0.28, 0.6, 0.9, 5),
+    () => new THREE.CylinderGeometry(0.35, 0.7, 0.95, 6),
+    () => new THREE.IcosahedronGeometry(0.72, 0),
+  ];
+
+  const particles = [];
+  const particleCount = 24;
+  for (let index = 0; index < particleCount; index += 1) {
+    const angle = (Math.PI * 2 * index) / particleCount + Math.random() * 0.45;
+    const speed = 22 + Math.random() * 26;
+    const rise = 26 + Math.random() * 17;
+    const geometryFactory = shardGeometryFactories[Math.floor(Math.random() * shardGeometryFactories.length)];
+    const mesh = new THREE.Mesh(
+      geometryFactory(),
+      new THREE.MeshBasicMaterial({
+        color: new THREE.Color().setHSL(0.0 + Math.random() * 0.03, 0.88, 0.42 + Math.random() * 0.14),
+        transparent: true,
+        opacity: 0.96,
+        depthWrite: false,
+      })
+    );
+    const shardScale = THREE.MathUtils.randFloat(0.9, 1.95);
+    mesh.scale.set(shardScale, shardScale, shardScale);
+    mesh.position.set(x, 0.7 + Math.random() * 0.4, z);
+    mesh.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI);
+    scene.add(mesh);
+
+    particles.push({
+      mesh,
+      vx: Math.cos(angle) * speed,
+      vz: Math.sin(angle) * speed,
+      vy: rise,
+      rvx: THREE.MathUtils.randFloatSpread(10),
+      rvy: THREE.MathUtils.randFloatSpread(10),
+      rvz: THREE.MathUtils.randFloatSpread(10),
+      grounded: false,
+      groundY: 0.13 + Math.random() * 0.05,
+    });
+  }
+
+  // Reuse the shard physics/fade system used by enemy death chunks.
+  enemyDeathEffects.push({ particles, life: 2.6, maxLife: 2.6 });
 }
 
 function spawnCannonScorchMark(x, z, radius) {
@@ -3024,36 +3053,47 @@ function spawnCannonScorchMark(x, z, radius) {
 }
 
 function spawnEnemyDeathExplosion(enemy) {
-  const ringMesh = new THREE.Mesh(
-    new THREE.RingGeometry(Math.max(1, enemy.radius * 0.55), Math.max(1.8, enemy.radius * 1.25), 28),
-    new THREE.MeshBasicMaterial({
-      color: 0x74ff8e,
-      transparent: true,
-      opacity: 0.88,
-      side: THREE.DoubleSide,
-      depthWrite: false,
-    })
-  );
-  ringMesh.rotation.x = -Math.PI / 2;
-  ringMesh.position.set(enemy.x, 0.34, enemy.z);
-  scene.add(ringMesh);
-
+  const shardGeometryFactories = [
+    () => new THREE.TetrahedronGeometry(0.8),
+    () => new THREE.CylinderGeometry(0.25, 0.5, 0.7, 5),
+    () => new THREE.CylinderGeometry(0.3, 0.55, 0.65, 6),
+    () => new THREE.IcosahedronGeometry(0.58, 0),
+  ];
   const particles = [];
-  const particleCount = 9;
+  const particleCount = 18;
   for (let index = 0; index < particleCount; index += 1) {
     const angle = (Math.PI * 2 * index) / particleCount + Math.random() * 0.4;
-    const speed = 20 + Math.random() * 22;
-    const rise = 24 + Math.random() * 16;
+    const speed = 18 + Math.random() * 20;
+    const rise = 22 + Math.random() * 15;
+    const geometryFactory = shardGeometryFactories[Math.floor(Math.random() * shardGeometryFactories.length)];
     const mesh = new THREE.Mesh(
-      deathExplosionParticleGeometry,
-      new THREE.MeshBasicMaterial({ color: 0x86ff6f, transparent: true, opacity: 0.92, depthWrite: false })
+      geometryFactory(),
+      new THREE.MeshBasicMaterial({
+        color: new THREE.Color().setHSL(0.29 + Math.random() * 0.05, 0.78, 0.46 + Math.random() * 0.14),
+        transparent: true,
+        opacity: 0.94,
+        depthWrite: false,
+      })
     );
+    const shardScale = THREE.MathUtils.randFloat(0.65, 1.55);
+    mesh.scale.set(shardScale, shardScale, shardScale);
     mesh.position.set(enemy.x, enemy.radius * 0.72 + 0.3, enemy.z);
+    mesh.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI);
     scene.add(mesh);
-    particles.push({ mesh, vx: Math.cos(angle) * speed, vz: Math.sin(angle) * speed, vy: rise });
+    particles.push({
+      mesh,
+      vx: Math.cos(angle) * speed,
+      vz: Math.sin(angle) * speed,
+      vy: rise,
+      rvx: THREE.MathUtils.randFloatSpread(9),
+      rvy: THREE.MathUtils.randFloatSpread(9),
+      rvz: THREE.MathUtils.randFloatSpread(9),
+      grounded: false,
+      groundY: 0.13 + Math.random() * 0.05,
+    });
   }
 
-  enemyDeathEffects.push({ ringMesh, particles, life: 0.3, maxLife: 0.3 });
+  enemyDeathEffects.push({ particles, life: 2.2, maxLife: 2.2 });
 }
 
 function spawnZombieSplatter(x, z, enemyRadius = 6.5) {
@@ -3400,26 +3440,43 @@ function updateEnemyDeathEffects(dt) {
     const effect = enemyDeathEffects[index];
     effect.life -= dt;
     const alpha = Math.max(0, effect.life / effect.maxLife);
-    effect.ringMesh.material.opacity = 0.88 * alpha;
-    const ringScale = 1 + (1 - alpha) * 1.4;
-    effect.ringMesh.scale.setScalar(ringScale);
 
     effect.particles.forEach((particle) => {
-      particle.vx *= Math.max(0, 1 - dt * 5.5);
-      particle.vz *= Math.max(0, 1 - dt * 5.5);
-      particle.vy -= 58 * dt;
-      particle.mesh.position.x += particle.vx * dt;
-      particle.mesh.position.y += particle.vy * dt;
-      particle.mesh.position.z += particle.vz * dt;
-      particle.mesh.material.opacity = 0.92 * alpha;
+      if (!particle.grounded) {
+        particle.vx *= Math.max(0, 1 - dt * 1.8);
+        particle.vz *= Math.max(0, 1 - dt * 1.8);
+        particle.vy -= 58 * dt;
+        particle.mesh.position.x += particle.vx * dt;
+        particle.mesh.position.y += particle.vy * dt;
+        particle.mesh.position.z += particle.vz * dt;
+
+        if (particle.mesh.position.y <= particle.groundY) {
+          particle.mesh.position.y = particle.groundY;
+          particle.grounded = true;
+          particle.vx *= 0.18;
+          particle.vz *= 0.18;
+          particle.vy = 0;
+        }
+      } else {
+        particle.vx *= Math.max(0, 1 - dt * 4.2);
+        particle.vz *= Math.max(0, 1 - dt * 4.2);
+        particle.mesh.position.x += particle.vx * dt;
+        particle.mesh.position.z += particle.vz * dt;
+
+        const flattenSpeed = 0.8;
+        particle.mesh.scale.y = Math.max(0.18, particle.mesh.scale.y * (1 - dt * flattenSpeed));
+      }
+
+      particle.mesh.rotation.x += particle.rvx * dt;
+      particle.mesh.rotation.y += particle.rvy * dt;
+      particle.mesh.rotation.z += particle.rvz * dt;
+      particle.mesh.material.opacity = (particle.grounded ? 0.7 : 0.95) * alpha;
     });
 
     if (effect.life <= 0) {
-      scene.remove(effect.ringMesh);
-      effect.ringMesh.geometry.dispose();
-      effect.ringMesh.material.dispose();
       effect.particles.forEach((particle) => {
         scene.remove(particle.mesh);
+        particle.mesh.geometry.dispose();
         particle.mesh.material.dispose();
       });
       enemyDeathEffects.splice(index, 1);
@@ -4370,11 +4427,14 @@ function resetPrototype() {
     effect.mesh.material.dispose();
   });
   enemyDeathEffects.splice(0).forEach((effect) => {
-    scene.remove(effect.ringMesh);
-    effect.ringMesh.geometry.dispose();
-    effect.ringMesh.material.dispose();
+    if (effect.ringMesh) {
+      scene.remove(effect.ringMesh);
+      effect.ringMesh.geometry.dispose();
+      effect.ringMesh.material.dispose();
+    }
     effect.particles.forEach((particle) => {
       scene.remove(particle.mesh);
+      particle.mesh.geometry?.dispose?.();
       particle.mesh.material.dispose();
     });
   });

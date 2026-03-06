@@ -6,10 +6,13 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "postbuild": "cp -R assets weapon-assets-svg zombie-characters main-character-Outlined kenney_blaster-kit_2.1 kenney_graveyard-kit_5.0 vendor dist/",
+    "postbuild": "cp -R assets weapon-assets-svg zombie-characters main-character-Outlined kenney_animated-characters-1 kenney_animated-characters-2 kenney_animated-characters-3 kenney_blaster-kit_2.1 kenney_graveyard-kit_5.0 vendor dist/",
     "preview": "vite preview"
   },
   "devDependencies": {
     "vite": "^5.4.10"
+  },
+  "dependencies": {
+    "three": "^0.183.2"
   }
 }

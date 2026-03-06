@@ -853,6 +853,7 @@ const enemies = [];
 const bullets = [];
 const turretBullets = [];
 const impactEffects = [];
+const cannonScorchMarks = [];
 const enemyDeathEffects = [];
 const zombieSplatters = [];
 const muzzleFlashes = [];
@@ -982,9 +983,24 @@ const playerWeaponModelScaleById = {
 
 const ENABLE_PLAYER_WEAPON_MODELS = true;
 const LEVEL1_GHOST_MODEL_PATH = "kenney_graveyard-kit_5.0/Models/GLB%20format/character-ghost.glb";
-const LEVEL2_ZOMBIE_MODEL_PATH = "kenney_graveyard-kit_5.0/Models/GLB%20format/character-zombie.glb";
-const LEVEL3_SKELETON_MODEL_PATH = "kenney_graveyard-kit_5.0/Models/GLB%20format/character-skeleton.glb";
-const LEVEL4_VAMPIRE_MODEL_PATH = "kenney_graveyard-kit_5.0/Models/GLB%20format/character-vampire.glb";
+const LEVEL1_ZOMBIEA_FBX_MODEL_PATH = "kenney_animated-characters-1/Model/characterMedium.fbx";
+const LEVEL1_ZOMBIEA_RUN_FBX_PATH = "kenney_animated-characters-1/Animations/run.fbx";
+const LEVEL1_ZOMBIEA_SKIN_PATH = "kenney_animated-characters-1/Skins/zombieA.png";
+const LEVEL2_CYBORG_FBX_MODEL_PATH = "kenney_animated-characters-2/Model/characterMedium.fbx";
+const LEVEL2_CYBORG_RUN_FBX_PATH = "kenney_animated-characters-2/Animations/run.fbx";
+const LEVEL2_CYBORG_SKIN_PATH = "kenney_animated-characters-2/Skins/cyborgFemaleA.png";
+const LEVEL3_ZOMBIE_FEMALE_FBX_MODEL_PATH = "kenney_animated-characters-3/Model/characterMedium.fbx";
+const LEVEL3_ZOMBIE_FEMALE_RUN_FBX_PATH = "kenney_animated-characters-3/Animations/run.fbx";
+const LEVEL3_ZOMBIE_FEMALE_SKIN_PATH = "kenney_animated-characters-3/Skins/zombieFemaleA.png";
+const LEVEL4_ZOMBIE_MALE_FBX_MODEL_PATH = "kenney_animated-characters-3/Model/characterMedium.fbx";
+const LEVEL4_ZOMBIE_MALE_RUN_FBX_PATH = "kenney_animated-characters-3/Animations/run.fbx";
+const LEVEL4_ZOMBIE_MALE_SKIN_PATH = "kenney_animated-characters-3/Skins/zombieMaleA.png";
+const PLAYER_CHARACTER_MODEL_PATH = "kenney_graveyard-kit_5.0/Models/GLB%20format/character-vampire.glb";
+const FIELD_PINE_CROOKED_MODEL_PATH = "kenney_graveyard-kit_5.0/Models/GLB%20format/pine-crooked.glb";
+const FIELD_PINE_MODEL_PATH = "kenney_graveyard-kit_5.0/Models/GLB%20format/pine.glb";
+const FIELD_ROCKS_TALL_MODEL_PATH = "kenney_graveyard-kit_5.0/Models/GLB%20format/rocks-tall.glb";
+const FIELD_ROCKS_MODEL_PATH = "kenney_graveyard-kit_5.0/Models/GLB%20format/rocks.glb";
+const FIELD_DEBRIS_MODEL_PATH = "kenney_graveyard-kit_5.0/Models/GLB%20format/debris.glb";
 const BASE_FENCE_CURVE_MODEL_PATH = "kenney_graveyard-kit_5.0/Models/GLB%20format/iron-fence-curve.glb";
 const BASE_FENCE_BORDER_CURVE_MODEL_PATH = "kenney_graveyard-kit_5.0/Models/GLB%20format/iron-fence-border-curve.glb";
 const BASE_BRICK_WALL_CURVE_MODEL_PATH = "kenney_graveyard-kit_5.0/Models/GLB%20format/brick-wall-curve.glb";
@@ -994,6 +1010,10 @@ const CLIP_SMALL_MODEL_PATH = "kenney_blaster-kit_2.1/Models/GLB%20format/clip-s
 const playerWeaponModels = new Map();
 let gltfLoader = null;
 let gltfLoaderReadyPromise = null;
+let fbxLoader = null;
+let fbxLoaderReadyPromise = null;
+let skeletonCloneFn = null;
+let skeletonCloneReadyPromise = null;
 let weaponModelsLoadStarted = false;
 let level1GhostPrototype = null;
 let level1GhostLoadStarted = false;
@@ -1004,14 +1024,19 @@ let level2ZombieAnimationClip = null;
 let level3SkeletonPrototype = null;
 let level3SkeletonLoadStarted = false;
 let level3SkeletonAnimationClip = null;
-let level4VampirePrototype = null;
-let level4VampireLoadStarted = false;
-let level4VampireAnimationClip = null;
+let level4EnemyPrototype = null;
+let level4EnemyLoadStarted = false;
+let level4EnemyAnimationClip = null;
+let playerCharacterPrototype = null;
+let playerCharacterLoadStarted = false;
 let baseFencePerimeterBuilt = false;
 let baseFencePerimeterLoadStarted = false;
 let baseFenceMainGroup = null;
 let baseFenceInnerGroup = null;
 let baseBrickWallGroup = null;
+let fieldScatterPropsBuilt = false;
+let fieldScatterPropsLoadStarted = false;
+let fieldScatterPropsGroup = null;
 let clipLargePrototype = null;
 let clipSmallPrototype = null;
 let reloadPropsLoadStarted = false;
@@ -1050,6 +1075,92 @@ function ensureGLTFLoader() {
   return gltfLoaderReadyPromise;
 }
 
+function ensureFBXLoader() {
+  if (fbxLoader) {
+    return Promise.resolve(fbxLoader);
+  }
+  if (fbxLoaderReadyPromise) {
+    return fbxLoaderReadyPromise;
+  }
+
+  fbxLoaderReadyPromise = import("./vendor/three/examples/jsm/loaders/FBXLoader.js")
+    .then((module) => {
+      const LoaderClass = module?.FBXLoader;
+      if (!LoaderClass) {
+        return null;
+      }
+      fbxLoader = new LoaderClass();
+      return fbxLoader;
+    })
+    .catch(() => {
+      fbxLoaderReadyPromise = null;
+      return null;
+    });
+
+  return fbxLoaderReadyPromise;
+}
+
+function loadFBXAsset(loader, path) {
+  return new Promise((resolve, reject) => {
+    loader.load(path, resolve, undefined, reject);
+  });
+}
+
+function pickBestLocomotionClip(clips) {
+  if (!Array.isArray(clips) || clips.length === 0) {
+    return null;
+  }
+
+  const normalized = clips.filter(Boolean);
+  if (normalized.length === 0) {
+    return null;
+  }
+
+  const byName = (regex) => normalized.find((clip) => regex.test(String(clip.name || "")));
+
+  const preferredRun = byName(/\brun\b|running|jog|sprint/i);
+  if (preferredRun) {
+    return preferredRun;
+  }
+
+  const preferredWalk = byName(/\bwalk\b|walking|locomotion|move/i);
+  if (preferredWalk) {
+    return preferredWalk;
+  }
+
+  const notPose = normalized.find((clip) => !/targeting\s*pose|\bpose\b|\bidle\b/i.test(String(clip.name || "")));
+  if (notPose) {
+    return notPose;
+  }
+
+  return normalized[0];
+}
+
+function ensureSkeletonCloneFn() {
+  if (skeletonCloneFn) {
+    return Promise.resolve(skeletonCloneFn);
+  }
+  if (skeletonCloneReadyPromise) {
+    return skeletonCloneReadyPromise;
+  }
+
+  skeletonCloneReadyPromise = import("./vendor/three/examples/jsm/utils/SkeletonUtils.js")
+    .then((module) => {
+      const cloneFn = module?.clone;
+      if (typeof cloneFn !== "function") {
+        return null;
+      }
+      skeletonCloneFn = cloneFn;
+      return skeletonCloneFn;
+    })
+    .catch(() => {
+      skeletonCloneReadyPromise = null;
+      return null;
+    });
+
+  return skeletonCloneReadyPromise;
+}
+
 function normalizeWeaponModelSize(modelRoot, targetLongestSide = 9.5) {
   const box = new THREE.Box3().setFromObject(modelRoot);
   const size = new THREE.Vector3();
@@ -1063,16 +1174,18 @@ function normalizeWeaponModelSize(modelRoot, targetLongestSide = 9.5) {
 }
 
 function updatePlayerCharacterModel() {
-  if (!level4VampirePrototype) {
-    return;
-  }
-
   if (playerCharacterModel) {
     playerMesh.remove(playerCharacterModel);
     playerCharacterModel = null;
   }
 
-  const model = level4VampirePrototype.clone(true);
+  if (!playerCharacterPrototype) {
+    playerFallbackMesh.visible = true;
+    return;
+  }
+
+  // Keep the original calibration path for weapon alignment and aiming visuals.
+  const model = playerCharacterPrototype.clone(true);
   model.position.set(0, -11.2, 0);
   model.traverse((node) => {
     if (!node.isMesh) {
@@ -1084,6 +1197,42 @@ function updatePlayerCharacterModel() {
   playerMesh.add(model);
   playerCharacterModel = model;
   playerFallbackMesh.visible = false;
+}
+
+function loadPlayerCharacterModel() {
+  if (playerCharacterLoadStarted || playerCharacterPrototype) {
+    return;
+  }
+  playerCharacterLoadStarted = true;
+
+  ensureGLTFLoader()
+    .then((loader) => {
+      if (!loader) {
+        playerCharacterLoadStarted = false;
+        return;
+      }
+
+      loader.load(
+        PLAYER_CHARACTER_MODEL_PATH,
+        (gltf) => {
+          try {
+            const model = gltf.scene;
+            prepareCharacterPrototype(model, regularEnemyTiers.level4.radius * 2.2);
+            playerCharacterPrototype = model;
+            updatePlayerCharacterModel();
+          } catch {
+            playerCharacterLoadStarted = false;
+          }
+        },
+        undefined,
+        () => {
+          playerCharacterLoadStarted = false;
+        }
+      );
+    })
+    .catch(() => {
+      playerCharacterLoadStarted = false;
+    });
 }
 
 function updatePlayerWeaponModel() {
@@ -1191,30 +1340,119 @@ function loadLevel1GhostModel() {
   }
   level1GhostLoadStarted = true;
 
-  ensureGLTFLoader()
+  ensureFBXLoader()
     .then((loader) => {
       if (!loader) {
         level1GhostLoadStarted = false;
         return;
       }
 
-      loader.load(
-        LEVEL1_GHOST_MODEL_PATH,
-        (gltf) => {
+      Promise.allSettled([
+        loadFBXAsset(loader, LEVEL1_ZOMBIEA_FBX_MODEL_PATH),
+        loadFBXAsset(loader, LEVEL1_ZOMBIEA_RUN_FBX_PATH),
+      ])
+        .then((results) => {
           try {
-            const ghostModel = gltf.scene;
-            prepareCharacterPrototype(ghostModel, regularEnemyTiers.level1.radius * 2.2);
-            level1GhostPrototype = ghostModel;
-            level1GhostAnimationClip = gltf.animations?.[0] || null;
+            const modelResult = results[0];
+            const runResult = results[1];
+            if (!modelResult || modelResult.status !== "fulfilled" || !modelResult.value) {
+              console.error("[L1 FBX] Failed to load character model", modelResult?.reason || "Unknown error");
+              level1GhostLoadStarted = false;
+              return;
+            }
+
+            const characterModel = modelResult.value;
+            const runAnim = runResult?.status === "fulfilled" ? runResult.value : null;
+            if (runResult?.status !== "fulfilled") {
+              console.warn("[L1 FBX] run.fbx failed, using fallback animation", runResult?.reason || "Unknown error");
+            }
+
+            const hasMeshNodes = (root) => {
+              let found = false;
+              root?.traverse?.((node) => {
+                if (node.isMesh) {
+                  found = true;
+                }
+              });
+              return found;
+            };
+
+            const sourceModel = runAnim && hasMeshNodes(runAnim) ? runAnim : characterModel;
+
+            const skinTexture = new THREE.TextureLoader().load(LEVEL1_ZOMBIEA_SKIN_PATH);
+            skinTexture.colorSpace = THREE.SRGBColorSpace;
+            skinTexture.flipY = false;
+
+            prepareCharacterPrototype(sourceModel, regularEnemyTiers.level1.radius * 2.86);
+            sourceModel.traverse((node) => {
+              if (!node.isMesh) {
+                return;
+              }
+              const applyZombieSkinToMaterial = (sourceMaterial) => {
+                if (!sourceMaterial || typeof sourceMaterial.clone !== "function") {
+                  return sourceMaterial;
+                }
+                const nextMaterial = sourceMaterial.clone();
+                nextMaterial.map = skinTexture;
+                nextMaterial.color = new THREE.Color(0xffffff);
+                nextMaterial.transparent = false;
+                nextMaterial.opacity = 1;
+                nextMaterial.alphaTest = 0;
+                nextMaterial.depthWrite = true;
+                nextMaterial.side = THREE.FrontSide;
+                nextMaterial.emissive?.set?.(0x000000);
+                if (node.isSkinnedMesh) {
+                  nextMaterial.skinning = true;
+                }
+                nextMaterial.needsUpdate = true;
+                return nextMaterial;
+              };
+
+              if (Array.isArray(node.material)) {
+                node.material = node.material.map((material) => applyZombieSkinToMaterial(material));
+              } else {
+                node.material = applyZombieSkinToMaterial(node.material);
+              }
+            });
+
+            level1GhostPrototype = sourceModel;
+            const runAnimClips = Array.isArray(runAnim?.animations) ? runAnim.animations : [];
+            const sourceModelClips = Array.isArray(sourceModel?.animations) ? sourceModel.animations : [];
+            level1GhostAnimationClip =
+              pickBestLocomotionClip(runAnimClips) ||
+              pickBestLocomotionClip(sourceModelClips) ||
+              null;
+            console.info("[L1 FBX] zombieA character loaded", {
+              hasRun: !!level1GhostAnimationClip,
+            });
+
+            try {
+              const countSkinned = (root) => {
+                let c = 0;
+                root?.traverse?.((n) => {
+                  if (n.isSkinnedMesh) c += 1;
+                });
+                return c;
+              };
+
+              console.info("[L1 FBX DEBUG] clip/proto info", {
+                clipName: level1GhostAnimationClip?.name || null,
+                clipTracks: level1GhostAnimationClip?.tracks?.length || 0,
+                prototypeHasSkinnedMeshes: countSkinned(sourceModel || {}),
+                originalModelHasSkinnedMeshes: countSkinned(characterModel || {}),
+              });
+            } catch (e) {
+              console.warn("[L1 FBX DEBUG] failed to emit clip/proto info", e);
+            }
           } catch {
+            console.error("[L1 FBX] Unexpected setup error while preparing character");
             level1GhostLoadStarted = false;
           }
-        },
-        undefined,
-        () => {
+        })
+        .catch(() => {
+          console.error("[L1 FBX] Loader promise failed");
           level1GhostLoadStarted = false;
-        }
-      );
+        });
     })
     .catch(() => {
       level1GhostLoadStarted = false;
@@ -1227,30 +1465,91 @@ function loadLevel2ZombieModel() {
   }
   level2ZombieLoadStarted = true;
 
-  ensureGLTFLoader()
+  ensureFBXLoader()
     .then((loader) => {
       if (!loader) {
         level2ZombieLoadStarted = false;
         return;
       }
 
-      loader.load(
-        LEVEL2_ZOMBIE_MODEL_PATH,
-        (gltf) => {
+      Promise.allSettled([
+        loadFBXAsset(loader, LEVEL2_CYBORG_FBX_MODEL_PATH),
+        loadFBXAsset(loader, LEVEL2_CYBORG_RUN_FBX_PATH),
+      ])
+        .then((results) => {
           try {
-            const zombieModel = gltf.scene;
-            prepareCharacterPrototype(zombieModel, regularEnemyTiers.level2.radius * 2.2);
-            level2ZombiePrototype = zombieModel;
-            level2ZombieAnimationClip = gltf.animations?.[0] || null;
+            const modelResult = results[0];
+            const runResult = results[1];
+            if (!modelResult || modelResult.status !== "fulfilled" || !modelResult.value) {
+              level2ZombieLoadStarted = false;
+              return;
+            }
+
+            const characterModel = modelResult.value;
+            const runAnim = runResult?.status === "fulfilled" ? runResult.value : null;
+
+            const hasMeshNodes = (root) => {
+              let found = false;
+              root?.traverse?.((node) => {
+                if (node.isMesh) {
+                  found = true;
+                }
+              });
+              return found;
+            };
+
+            const sourceModel = runAnim && hasMeshNodes(runAnim) ? runAnim : characterModel;
+
+            const skinTexture = new THREE.TextureLoader().load(LEVEL2_CYBORG_SKIN_PATH);
+            skinTexture.colorSpace = THREE.SRGBColorSpace;
+            skinTexture.flipY = false;
+
+            prepareCharacterPrototype(sourceModel, regularEnemyTiers.level2.radius * 2.2);
+            sourceModel.traverse((node) => {
+              if (!node.isMesh) {
+                return;
+              }
+              const applySkinToMaterial = (sourceMaterial) => {
+                if (!sourceMaterial || typeof sourceMaterial.clone !== "function") {
+                  return sourceMaterial;
+                }
+                const nextMaterial = sourceMaterial.clone();
+                nextMaterial.map = skinTexture;
+                nextMaterial.color = new THREE.Color(0xffffff);
+                nextMaterial.transparent = false;
+                nextMaterial.opacity = 1;
+                nextMaterial.alphaTest = 0;
+                nextMaterial.depthWrite = true;
+                nextMaterial.side = THREE.FrontSide;
+                nextMaterial.emissive?.set?.(0x000000);
+                if (node.isSkinnedMesh) {
+                  nextMaterial.skinning = true;
+                }
+                nextMaterial.needsUpdate = true;
+                return nextMaterial;
+              };
+
+              if (Array.isArray(node.material)) {
+                node.material = node.material.map((material) => applySkinToMaterial(material));
+              } else {
+                node.material = applySkinToMaterial(node.material);
+              }
+            });
+
+            level2ZombiePrototype = sourceModel;
+            const runAnimClips = Array.isArray(runAnim?.animations) ? runAnim.animations : [];
+            const sourceModelClips = Array.isArray(sourceModel?.animations) ? sourceModel.animations : [];
+            level2ZombieAnimationClip =
+              pickBestLocomotionClip(runAnimClips) ||
+              pickBestLocomotionClip(sourceModelClips) ||
+              null;
           } catch {
             level2ZombieLoadStarted = false;
           }
-        },
-        undefined,
-        () => {
+        })
+        .catch(() => {
           level2ZombieLoadStarted = false;
-        }
-      );
+        });
     })
     .catch(() => {
       level2ZombieLoadStarted = false;
@@ -1263,70 +1562,193 @@ function loadLevel3SkeletonModel() {
   }
   level3SkeletonLoadStarted = true;
 
-  ensureGLTFLoader()
+  ensureFBXLoader()
     .then((loader) => {
       if (!loader) {
         level3SkeletonLoadStarted = false;
         return;
       }
 
-      loader.load(
-        LEVEL3_SKELETON_MODEL_PATH,
-        (gltf) => {
+      Promise.allSettled([
+        loadFBXAsset(loader, LEVEL3_ZOMBIE_FEMALE_FBX_MODEL_PATH),
+        loadFBXAsset(loader, LEVEL3_ZOMBIE_FEMALE_RUN_FBX_PATH),
+      ])
+        .then((results) => {
           try {
-            const skeletonModel = gltf.scene;
-            prepareCharacterPrototype(skeletonModel, regularEnemyTiers.level3.radius * 2.2);
-            level3SkeletonPrototype = skeletonModel;
-            level3SkeletonAnimationClip = gltf.animations?.[0] || null;
+            const modelResult = results[0];
+            const runResult = results[1];
+            if (!modelResult || modelResult.status !== "fulfilled" || !modelResult.value) {
+              level3SkeletonLoadStarted = false;
+              return;
+            }
+
+            const characterModel = modelResult.value;
+            const runAnim = runResult?.status === "fulfilled" ? runResult.value : null;
+
+            const hasMeshNodes = (root) => {
+              let found = false;
+              root?.traverse?.((node) => {
+                if (node.isMesh) {
+                  found = true;
+                }
+              });
+              return found;
+            };
+
+            const sourceModel = runAnim && hasMeshNodes(runAnim) ? runAnim : characterModel;
+
+            const skinTexture = new THREE.TextureLoader().load(LEVEL3_ZOMBIE_FEMALE_SKIN_PATH);
+            skinTexture.colorSpace = THREE.SRGBColorSpace;
+            skinTexture.flipY = false;
+
+            prepareCharacterPrototype(sourceModel, regularEnemyTiers.level3.radius * 2.2);
+            sourceModel.traverse((node) => {
+              if (!node.isMesh) {
+                return;
+              }
+              const applySkinToMaterial = (sourceMaterial) => {
+                if (!sourceMaterial || typeof sourceMaterial.clone !== "function") {
+                  return sourceMaterial;
+                }
+                const nextMaterial = sourceMaterial.clone();
+                nextMaterial.map = skinTexture;
+                nextMaterial.color = new THREE.Color(0xffffff);
+                nextMaterial.transparent = false;
+                nextMaterial.opacity = 1;
+                nextMaterial.alphaTest = 0;
+                nextMaterial.depthWrite = true;
+                nextMaterial.side = THREE.FrontSide;
+                nextMaterial.emissive?.set?.(0x000000);
+                if (node.isSkinnedMesh) {
+                  nextMaterial.skinning = true;
+                }
+                nextMaterial.needsUpdate = true;
+                return nextMaterial;
+              };
+
+              if (Array.isArray(node.material)) {
+                node.material = node.material.map((material) => applySkinToMaterial(material));
+              } else {
+                node.material = applySkinToMaterial(node.material);
+              }
+            });
+
+            level3SkeletonPrototype = sourceModel;
+            const runAnimClips = Array.isArray(runAnim?.animations) ? runAnim.animations : [];
+            const sourceModelClips = Array.isArray(sourceModel?.animations) ? sourceModel.animations : [];
+            level3SkeletonAnimationClip =
+              pickBestLocomotionClip(runAnimClips) ||
+              pickBestLocomotionClip(sourceModelClips) ||
+              null;
           } catch {
             level3SkeletonLoadStarted = false;
           }
-        },
-        undefined,
-        () => {
+        })
+        .catch(() => {
           level3SkeletonLoadStarted = false;
-        }
-      );
+        });
     })
     .catch(() => {
       level3SkeletonLoadStarted = false;
     });
 }
 
-function loadLevel4VampireModel() {
-  if (level4VampireLoadStarted || level4VampirePrototype) {
+function loadLevel4EnemyModel() {
+  if (level4EnemyLoadStarted || level4EnemyPrototype) {
     return;
   }
-  level4VampireLoadStarted = true;
+  level4EnemyLoadStarted = true;
 
-  ensureGLTFLoader()
+  ensureFBXLoader()
     .then((loader) => {
       if (!loader) {
-        level4VampireLoadStarted = false;
+        level4EnemyLoadStarted = false;
         return;
       }
 
-      loader.load(
-        LEVEL4_VAMPIRE_MODEL_PATH,
-        (gltf) => {
+      Promise.allSettled([
+        loadFBXAsset(loader, LEVEL4_ZOMBIE_MALE_FBX_MODEL_PATH),
+        loadFBXAsset(loader, LEVEL4_ZOMBIE_MALE_RUN_FBX_PATH),
+      ])
+        .then((results) => {
           try {
-            const vampireModel = gltf.scene;
-            prepareCharacterPrototype(vampireModel, regularEnemyTiers.level4.radius * 2.2);
-            level4VampirePrototype = vampireModel;
-            level4VampireAnimationClip = gltf.animations?.[0] || null;
+            const modelResult = results[0];
+            const runResult = results[1];
+            if (!modelResult || modelResult.status !== "fulfilled" || !modelResult.value) {
+              level4EnemyLoadStarted = false;
+              return;
+            }
+
+            const characterModel = modelResult.value;
+            const runAnim = runResult?.status === "fulfilled" ? runResult.value : null;
+
+            const hasMeshNodes = (root) => {
+              let found = false;
+              root?.traverse?.((node) => {
+                if (node.isMesh) {
+                  found = true;
+                }
+              });
+              return found;
+            };
+
+            const sourceModel = runAnim && hasMeshNodes(runAnim) ? runAnim : characterModel;
+
+            const skinTexture = new THREE.TextureLoader().load(LEVEL4_ZOMBIE_MALE_SKIN_PATH);
+            skinTexture.colorSpace = THREE.SRGBColorSpace;
+            skinTexture.flipY = false;
+
+            prepareCharacterPrototype(sourceModel, regularEnemyTiers.level4.radius * 2.2);
+            sourceModel.traverse((node) => {
+              if (!node.isMesh) {
+                return;
+              }
+              const applySkinToMaterial = (sourceMaterial) => {
+                if (!sourceMaterial || typeof sourceMaterial.clone !== "function") {
+                  return sourceMaterial;
+                }
+                const nextMaterial = sourceMaterial.clone();
+                nextMaterial.map = skinTexture;
+                nextMaterial.color = new THREE.Color(0xffffff);
+                nextMaterial.transparent = false;
+                nextMaterial.opacity = 1;
+                nextMaterial.alphaTest = 0;
+                nextMaterial.depthWrite = true;
+                nextMaterial.side = THREE.FrontSide;
+                nextMaterial.emissive?.set?.(0x000000);
+                if (node.isSkinnedMesh) {
+                  nextMaterial.skinning = true;
+                }
+                nextMaterial.needsUpdate = true;
+                return nextMaterial;
+              };
+
+              if (Array.isArray(node.material)) {
+                node.material = node.material.map((material) => applySkinToMaterial(material));
+              } else {
+                node.material = applySkinToMaterial(node.material);
+              }
+            });
+
+            level4EnemyPrototype = sourceModel;
+            const runAnimClips = Array.isArray(runAnim?.animations) ? runAnim.animations : [];
+            const sourceModelClips = Array.isArray(sourceModel?.animations) ? sourceModel.animations : [];
+            level4EnemyAnimationClip =
+              pickBestLocomotionClip(runAnimClips) ||
+              pickBestLocomotionClip(sourceModelClips) ||
+              null;
+
             updatePlayerCharacterModel();
           } catch {
-            level4VampireLoadStarted = false;
+            level4EnemyLoadStarted = false;
           }
-        },
-        undefined,
-        () => {
-          level4VampireLoadStarted = false;
-        }
-      );
+        })
+        .catch(() => {
+          level4EnemyLoadStarted = false;
+        });
     })
     .catch(() => {
-      level4VampireLoadStarted = false;
+      level4EnemyLoadStarted = false;
     });
 }
 
@@ -1424,6 +1846,110 @@ function loadBaseFencePerimeter() {
     })
     .catch(() => {
       baseFencePerimeterLoadStarted = false;
+    });
+}
+
+function loadFieldScatterProps() {
+  if (fieldScatterPropsBuilt || fieldScatterPropsLoadStarted) {
+    return;
+  }
+  fieldScatterPropsLoadStarted = true;
+
+  ensureGLTFLoader()
+    .then((loader) => {
+      if (!loader) {
+        fieldScatterPropsLoadStarted = false;
+        return;
+      }
+
+      const loadPrototype = (path) => new Promise((resolve, reject) => {
+        loader.load(path, (gltf) => resolve(gltf.scene), undefined, reject);
+      });
+
+      Promise.all([
+        loadPrototype(FIELD_PINE_CROOKED_MODEL_PATH),
+        loadPrototype(FIELD_PINE_MODEL_PATH),
+        loadPrototype(FIELD_ROCKS_TALL_MODEL_PATH),
+        loadPrototype(FIELD_ROCKS_MODEL_PATH),
+        loadPrototype(FIELD_DEBRIS_MODEL_PATH),
+      ])
+        .then(([
+          pineCrookedPrototype,
+          pinePrototype,
+          rocksTallPrototype,
+          rocksPrototype,
+          debrisPrototype,
+        ]) => {
+          const prototypePool = [
+            pineCrookedPrototype,
+            pineCrookedPrototype,
+            pinePrototype,
+            pinePrototype,
+            rocksTallPrototype,
+            rocksPrototype,
+            debrisPrototype,
+          ];
+          const placements = [];
+          const targetCount = 40;
+          const minCenterRadius = 150;
+          const maxRadius = Math.min(worldSize.width, worldSize.depth) * 0.5 - 28;
+          const minSpacing = 26;
+
+          for (let attempts = 0; attempts < 900 && placements.length < targetCount; attempts += 1) {
+            const angle = Math.random() * Math.PI * 2;
+            const radius = THREE.MathUtils.randFloat(minCenterRadius, maxRadius);
+            const x = Math.cos(angle) * radius;
+            const z = Math.sin(angle) * radius;
+
+            let tooClose = false;
+            for (let i = 0; i < placements.length; i += 1) {
+              const placed = placements[i];
+              if (Math.hypot(placed.x - x, placed.z - z) < minSpacing) {
+                tooClose = true;
+                break;
+              }
+            }
+            if (tooClose) {
+              continue;
+            }
+
+            const prototype = prototypePool[Math.floor(Math.random() * prototypePool.length)];
+            placements.push({
+              prototype,
+              x,
+              z,
+              y: 0,
+              scale: THREE.MathUtils.randFloat(7.6, 9.6),
+              rotY: Math.random() * Math.PI * 2,
+            });
+          }
+
+          const propsGroup = new THREE.Group();
+          placements.forEach((placement) => {
+            const model = placement.prototype.clone(true);
+            model.position.set(placement.x, placement.y, placement.z);
+            model.rotation.y = placement.rotY;
+            model.scale.setScalar(placement.scale);
+            model.traverse((node) => {
+              if (!node.isMesh) {
+                return;
+              }
+              node.castShadow = true;
+              node.receiveShadow = true;
+            });
+            propsGroup.add(model);
+          });
+
+          scene.add(propsGroup);
+          fieldScatterPropsGroup = propsGroup;
+          fieldScatterPropsBuilt = true;
+        })
+        .catch(() => {
+          fieldScatterPropsLoadStarted = false;
+        });
+    })
+    .catch(() => {
+      fieldScatterPropsLoadStarted = false;
     });
 }
 
@@ -2018,6 +2544,8 @@ const regularEnemyTiers = {
     radius: 8.4 * ENEMY_SIZE_SCALE,
     color: 0x7f9bff,
     modelTier: 4,
+    modelScale: 1.6,
+    animationSpeed: 2,
     facingOffset: CHARACTER_FACING_OFFSET_BY_TIER[4],
   },
   level3: {
@@ -2029,6 +2557,8 @@ const regularEnemyTiers = {
     radius: 9.8 * ENEMY_SIZE_SCALE,
     color: 0xff8f72,
     modelTier: 3,
+    modelScale: 1.4,
+    animationSpeed: 1,
     facingOffset: CHARACTER_FACING_OFFSET_BY_TIER[3],
   },
   level2: {
@@ -2040,6 +2570,8 @@ const regularEnemyTiers = {
     radius: 7.5 * ENEMY_SIZE_SCALE,
     color: 0xf0c95f,
     modelTier: 2,
+    modelScale: 1.2,
+    animationSpeed: 1,
     facingOffset: CHARACTER_FACING_OFFSET_BY_TIER[2],
   },
   level1: {
@@ -2052,6 +2584,8 @@ const regularEnemyTiers = {
     color: 0x6ce36c,
     useGhostModel: true,
     modelTier: 1,
+    modelScale: 1,
+    animationSpeed: 1,
     facingOffset: CHARACTER_FACING_OFFSET_BY_TIER[1],
   },
 };
@@ -2187,34 +2721,75 @@ function spawnEnemy() {
     ? enemyType.facingOffset
     : CHARACTER_FACING_OFFSET_BY_TIER[modelTier] || 0;
 
+  const level1PrototypeFallback = level1GhostPrototype || level2ZombiePrototype;
+  const level1RunClipFallback = level1GhostAnimationClip || level2ZombieAnimationClip;
+
   const characterPrototype = modelTier === 4
-    ? level4VampirePrototype
+    ? level4EnemyPrototype
     : modelTier === 3
       ? level3SkeletonPrototype
       : modelTier === 2
         ? level2ZombiePrototype
         : enemyType.useGhostModel
-          ? level1GhostPrototype
+          ? level1PrototypeFallback
           : null;
   const characterAnimationClip = modelTier === 4
-    ? level4VampireAnimationClip
+    ? level4EnemyAnimationClip
     : modelTier === 3
       ? level3SkeletonAnimationClip
       : modelTier === 2
         ? level2ZombieAnimationClip
         : enemyType.useGhostModel
-          ? level1GhostAnimationClip
+          ? level1RunClipFallback
           : null;
-
   const useCharacterModel = !!characterPrototype;
   let mesh;
   let animationRoot = null;
   if (useCharacterModel) {
-    const modelClone = characterPrototype.clone(true);
+    let modelClone = skeletonCloneFn ? skeletonCloneFn(characterPrototype) : characterPrototype.clone(true);
     if (Number.isFinite(enemyType.modelScale) && enemyType.modelScale > 0) {
       modelClone.scale.multiplyScalar(enemyType.modelScale);
     }
     modelClone.position.set(0, 0.5, 0);
+
+    // If the cloned prototype doesn't contain any skinned meshes
+    // try falling back to a known skinned prototype (level2) so
+    // the animation clip actually drives a visible skinned mesh.
+    const countSkinnedMeshes = (root) => {
+      let c = 0;
+      root?.traverse?.((n) => {
+        if (n.isSkinnedMesh) c += 1;
+      });
+      return c;
+    };
+
+    if (modelTier === 1 && countSkinnedMeshes(modelClone) === 0) {
+      console.warn('[L1 DEBUG] spawnEnemy: cloned prototype has 0 skinned meshes, attempting fallback');
+      if (level2ZombiePrototype) {
+        try {
+          const altClone = skeletonCloneFn ? skeletonCloneFn(level2ZombiePrototype) : level2ZombiePrototype.clone(true);
+          if (Number.isFinite(enemyType.modelScale) && enemyType.modelScale > 0) {
+            altClone.scale.multiplyScalar(enemyType.modelScale);
+          }
+          altClone.position.set(0, 0.5, 0);
+          modelClone = altClone;
+          console.info('[L1 DEBUG] spawnEnemy: fallback to level2 prototype succeeded');
+        } catch (e) {
+          console.warn('[L1 DEBUG] spawnEnemy: fallback clone failed', e);
+        }
+      }
+    }
+
+    // Ensure cloned rigs are fully live for runtime animation updates.
+    modelClone.traverse((node) => {
+      if (node.isBone) {
+        node.matrixAutoUpdate = true;
+      }
+      if (node.isSkinnedMesh) {
+        node.frustumCulled = false;
+      }
+    });
+
     mesh = new THREE.Group();
     mesh.position.set(x, 0, z);
     mesh.add(modelClone);
@@ -2238,9 +2813,105 @@ function spawnEnemy() {
 
   let animationMixer = null;
   if (ENEMY_USE_CHARACTER_ANIMATIONS && useCharacterModel && characterAnimationClip) {
+    // lightweight debug object to surface runtime info in the console
+    try {
+      window.__l1Debug = window.__l1Debug || { spawnCount: 0, mixerUpdatedLogged: false };
+    } catch (e) {}
+
     animationMixer = new THREE.AnimationMixer(animationRoot);
-    const action = animationMixer.clipAction(characterAnimationClip);
-    action.play();
+    const animationSpeed = Number.isFinite(enemyType.animationSpeed) ? enemyType.animationSpeed : 1;
+    animationMixer.timeScale = 1;
+    const runAction = animationMixer.clipAction(characterAnimationClip);
+    runAction.reset();
+    runAction.enabled = true;
+    runAction.paused = false;
+    runAction.clampWhenFinished = false;
+    runAction.setLoop(THREE.LoopRepeat, Infinity);
+    runAction.setEffectiveTimeScale(animationSpeed);
+    runAction.setEffectiveWeight(1);
+    try {
+      runAction.play();
+    } catch (e) {
+      console.warn('[L1 DEBUG] runAction.play() threw', e);
+    }
+
+    // Post-play diagnostics: dump action state and skinned mesh properties
+    try {
+      const actionDiag = {
+        clipName: characterAnimationClip?.name || null,
+        actionTime: runAction?.time ?? null,
+        actionWeight: typeof runAction?.getEffectiveWeight === 'function' ? runAction.getEffectiveWeight() : runAction?.weight ?? null,
+        actionLoop: runAction?.loop ?? null,
+      };
+      const skinnedInfo = [];
+      try {
+        (animationRoot || {}).traverse?.((n) => {
+          if (n.isSkinnedMesh) {
+            const mats = Array.isArray(n.material) ? n.material : [n.material];
+            skinnedInfo.push({
+              meshName: n.name || null,
+              materialSkinning: mats.map((m) => (m ? !!m.skinning : null)),
+              bones: n.skeleton && Array.isArray(n.skeleton.bones) ? n.skeleton.bones.length : 0,
+              firstBone: n.skeleton && Array.isArray(n.skeleton.bones) ? n.skeleton.bones[0]?.name || null : null,
+            });
+          }
+        });
+      } catch (e) {}
+      console.info('[L1 DEBUG] post-play action/skinnedInfo', { actionDiag, skinnedInfo });
+    } catch (e) {
+      console.warn('[L1 DEBUG] post-play diagnostics failed', e);
+    }
+
+    try {
+      const countSkinnedMeshes = (root) => {
+        let c = 0;
+        root?.traverse?.((n) => {
+          if (n.isSkinnedMesh) c += 1;
+        });
+        return c;
+      };
+      try {
+        window.__l1Debug.spawnCount += 1;
+      } catch (e) {}
+      console.info('[L1 DEBUG] spawnEnemy animation setup', {
+        spawnIndex: (window.__l1Debug && window.__l1Debug.spawnCount) || null,
+        hasClip: !!characterAnimationClip,
+        clipTracks: characterAnimationClip?.tracks?.length || 0,
+        skinnedMeshCount: countSkinnedMeshes(animationRoot || {}),
+        actionTime: runAction?.time ?? null,
+      });
+      // If we have a clip, emit detailed diagnostics comparing clip tracks to skeleton bones
+      try {
+        if (characterAnimationClip) {
+          const clipTrackNames = (characterAnimationClip.tracks || []).map((t) => t.name);
+          const clipSample = clipTrackNames.slice(0, 40);
+          const boneNames = new Set();
+          (animationRoot || {}).traverse?.((n) => {
+            if (n.isSkinnedMesh && n.skeleton && Array.isArray(n.skeleton.bones)) {
+              n.skeleton.bones.forEach((b) => boneNames.add(b.name));
+            }
+          });
+
+          const trackRootNames = clipTrackNames.map((n) => (typeof n === 'string' ? n.split('.')[0] : n));
+          let matched = 0;
+          for (const rootName of trackRootNames) {
+            if (boneNames.has(rootName)) matched += 1;
+          }
+
+          console.info('[L1 DEBUG] clip-vs-skeleton', {
+            clipSample,
+            totalClipTracks: clipTrackNames.length,
+            sampleBoneNames: Array.from(boneNames).slice(0, 60),
+            totalBones: boneNames.size,
+            matchedTrackRoots: matched,
+          });
+        }
+      } catch (e) {
+        console.warn('[L1 DEBUG] detailed clip-vs-skeleton diagnostic failed', e);
+      }
+    } catch (e) {
+      console.warn('[L1 DEBUG] spawnEnemy animation info failed', e);
+    }
   }
 
   const initialFacingYaw = Math.atan2(-x, -z) + facingOffset;
@@ -2290,7 +2961,7 @@ function getBulletMaterial(projectileType, owner) {
   return owner === "player" ? playerBulletMaterial : turretBulletMaterial;
 }
 
-function spawnImpactEffect(x, z, radius, colorHex, maxLife = 0.24) {
+function spawnImpactEffect(x, z, radius, colorHex, maxLife = 0.24, baseOpacity = 0.85) {
   const inner = Math.max(0.5, radius * 0.65);
   const outer = Math.max(1.2, radius);
   const mesh = new THREE.Mesh(
@@ -2298,7 +2969,7 @@ function spawnImpactEffect(x, z, radius, colorHex, maxLife = 0.24) {
     new THREE.MeshBasicMaterial({
       color: colorHex,
       transparent: true,
-      opacity: 0.85,
+      opacity: baseOpacity,
       side: THREE.DoubleSide,
       depthWrite: false,
     })
@@ -2307,7 +2978,46 @@ function spawnImpactEffect(x, z, radius, colorHex, maxLife = 0.24) {
   mesh.position.set(x, 0.22, z);
   scene.add(mesh);
 
-  impactEffects.push({ mesh, life: maxLife, maxLife, growth: 1.65 });
+  impactEffects.push({ mesh, life: maxLife, maxLife, growth: 1.65, baseOpacity });
+}
+
+function spawnCannonBlastEffect(x, z, radius) {
+  spawnImpactEffect(x, z, Math.max(10, radius * 0.9), 0xff2a2a, 0.36, 0.94);
+  spawnImpactEffect(x, z, Math.max(12, radius * 1.18), 0xb00808, 0.52, 0.62);
+
+  const flash = new THREE.Mesh(
+    new THREE.CircleGeometry(Math.max(6.5, radius * 0.52), 30),
+    new THREE.MeshBasicMaterial({
+      color: 0xff4f3b,
+      transparent: true,
+      opacity: 0.7,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    })
+  );
+  flash.rotation.x = -Math.PI / 2;
+  flash.position.set(x, 0.21, z);
+  scene.add(flash);
+  impactEffects.push({ mesh: flash, life: 0.16, maxLife: 0.16, growth: 1.9, baseOpacity: 0.7 });
+}
+
+function spawnCannonScorchMark(x, z, radius) {
+  const scorch = new THREE.Mesh(
+    new THREE.CircleGeometry(Math.max(4.5, radius * THREE.MathUtils.randFloat(0.35, 0.5)), 26),
+    new THREE.MeshBasicMaterial({
+      color: 0x0f0c0b,
+      transparent: true,
+      opacity: 0.46,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    })
+  );
+  scorch.rotation.x = -Math.PI / 2;
+  scorch.rotation.z = Math.random() * Math.PI * 2;
+  scorch.position.set(x, 0.12, z);
+  scene.add(scorch);
+
+  cannonScorchMarks.push({ mesh: scorch, life: 55, maxLife: 55 });
 }
 
 function spawnEnemyDeathExplosion(enemy) {
@@ -2653,7 +3363,7 @@ function updateImpactEffects(dt) {
     const effect = impactEffects[index];
     effect.life -= dt;
     const alpha = Math.max(0, effect.life / effect.maxLife);
-    effect.mesh.material.opacity = 0.85 * alpha;
+    effect.mesh.material.opacity = (effect.baseOpacity ?? 0.85) * alpha;
     const scale = 1 + (1 - alpha) * effect.growth;
     effect.mesh.scale.setScalar(scale);
 
@@ -2662,6 +3372,22 @@ function updateImpactEffects(dt) {
       effect.mesh.geometry.dispose();
       effect.mesh.material.dispose();
       impactEffects.splice(index, 1);
+    }
+  }
+}
+
+function updateCannonScorchMarks(dt) {
+  for (let index = cannonScorchMarks.length - 1; index >= 0; index -= 1) {
+    const mark = cannonScorchMarks[index];
+    mark.life -= dt;
+    const alpha = Math.max(0, mark.life / mark.maxLife);
+    mark.mesh.material.opacity = 0.16 + alpha * 0.3;
+
+    if (mark.life <= 0) {
+      scene.remove(mark.mesh);
+      mark.mesh.geometry.dispose();
+      mark.mesh.material.dispose();
+      cannonScorchMarks.splice(index, 1);
     }
   }
 }
@@ -3086,7 +3812,9 @@ function updateProjectiles(container, dt) {
           hit = true;
           break;
         } else if (bullet.projectileType === "cannon") {
-          spawnImpactEffect(bullet.x, bullet.z, Math.max(8, bullet.splashRadius), 0xffd88a, 0.24);
+          const blastRadius = Math.max(8, bullet.splashRadius);
+          spawnCannonBlastEffect(bullet.x, bullet.z, blastRadius);
+          spawnCannonScorchMark(bullet.x, bullet.z, blastRadius);
           applyAreaDamage(bullet.x, bullet.z, bullet.splashRadius, bullet.damage);
           hit = true;
           break;
@@ -3140,6 +3868,7 @@ function updateEnemies(dt) {
 
       if (enemy.isCharacterModel) {
         enemy.facingYaw = Math.atan2(moveDirX, moveDirZ) + (enemy.facingOffset || 0);
+
         enemy.walkBobPhase += dt * (5.2 + enemy.speed * 0.016);
         enemy.shamblePhase += dt * (11.5 + enemy.speed * 0.03);
         const runSwayX = Math.sin(enemy.shamblePhase * 1.35) * ENEMY_SHAMBLE_SWAY;
@@ -3172,6 +3901,59 @@ function updateEnemies(dt) {
 
     if (enemy.animationMixer) {
       enemy.animationMixer.update(dt);
+      try {
+        if (window.__l1Debug && !window.__l1Debug.mixerUpdatedLogged) {
+          window.__l1Debug.mixerUpdatedLogged = true;
+          const maybeAction = enemy.animationMixer._actions && enemy.animationMixer._actions[0];
+          // Collect action/clip diagnostics
+          const actionsDiag = (enemy.animationMixer._actions || []).map((a) => {
+            return {
+              clipName: a._clip?.name || null,
+              time: a.time ?? null,
+              weight: typeof a.getEffectiveWeight === 'function' ? a.getEffectiveWeight() : a.weight,
+              clipTracks: a._clip?.tracks?.length || 0,
+            };
+          });
+
+          let bindingCount = null;
+          let bindingSample = null;
+          try {
+            bindingCount = enemy.animationMixer._bindings ? enemy.animationMixer._bindings.length : null;
+            bindingSample = (enemy.animationMixer._bindings || []).slice(0, 20).map((b) => {
+              try {
+                return b?.binding?.path || b?.binding?.parsedPath || b?._propertyBinding || b?.binding?.cachedPath || null;
+              } catch (e) {
+                return null;
+              }
+            });
+          } catch (e) {
+            bindingSample = null;
+          }
+
+          console.info('[L1 DEBUG] mixer.update executed for enemy', {
+            x: enemy.x,
+            z: enemy.z,
+            dt,
+            mixerTime: enemy.animationMixer.time ?? null,
+            actions: actionsDiag,
+            actionCount: enemy.animationMixer._actions ? enemy.animationMixer._actions.length : null,
+            bindingCount,
+            bindingSample,
+          });
+        }
+      } catch (e) {
+        console.warn('[L1 DEBUG] mixer.update debug log failed', e);
+      }
+      // Ensure skinned meshes' skeletons are updated after mixer advances
+      try {
+        (enemy.animationRoot || {}).traverse?.((n) => {
+          if (n.isSkinnedMesh && n.skeleton && typeof n.skeleton.update === 'function') {
+            n.skeleton.update();
+          }
+        });
+      } catch (e) {
+        console.warn('[L1 DEBUG] skeleton update after mixer failed', e);
+      }
       if (enemy.animationRoot) {
         enemy.animationRoot.rotation.y = 0;
       }
@@ -4034,6 +4816,7 @@ function tick(now) {
     updateProjectiles(bullets, dt);
     updateProjectiles(turretBullets, dt);
     updateImpactEffects(dt);
+    updateCannonScorchMarks(dt);
     updateEnemyDeathEffects(dt);
     updateZombieSplatters(dt);
     updateCreepDust(dt);
@@ -4093,11 +4876,14 @@ setTimeout(() => {
 }, 0);
 setTimeout(() => {
   try {
+    ensureSkeletonCloneFn();
+    loadPlayerCharacterModel();
     loadLevel1GhostModel();
     loadLevel2ZombieModel();
     loadLevel3SkeletonModel();
-    loadLevel4VampireModel();
+    loadLevel4EnemyModel();
     loadBaseFencePerimeter();
+    loadFieldScatterProps();
     loadReloadPropsModels();
   } catch {}
 }, 0);

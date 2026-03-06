@@ -1914,12 +1914,15 @@ function loadFieldScatterProps() {
             }
 
             const prototype = prototypePool[Math.floor(Math.random() * prototypePool.length)];
+            const isTreePrototype = prototype === pineCrookedPrototype || prototype === pinePrototype;
+            const baseScale = THREE.MathUtils.randFloat(7.6, 9.6);
+            const treeAgeScale = THREE.MathUtils.randFloat(1.5, 2.0);
             placements.push({
               prototype,
               x,
               z,
               y: 0,
-              scale: THREE.MathUtils.randFloat(7.6, 9.6),
+              scale: isTreePrototype ? baseScale * treeAgeScale : baseScale,
               rotY: Math.random() * Math.PI * 2,
             });
           }

@@ -162,8 +162,19 @@ scene.add(hemi);
 const sun = new THREE.DirectionalLight(0xffffff, 0.92);
 sun.position.set(120, 220, 80);
 sun.castShadow = true;
-sun.shadow.mapSize.set(1024, 1024);
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.camera.left = -360;
+sun.shadow.camera.right = 360;
+sun.shadow.camera.top = 360;
+sun.shadow.camera.bottom = -360;
+sun.shadow.camera.near = 10;
+sun.shadow.camera.far = 900;
+sun.shadow.bias = -0.00035;
+sun.shadow.normalBias = 0.03;
+sun.shadow.camera.updateProjectionMatrix();
+sun.target.position.set(0, 0, 0);
 scene.add(sun);
+scene.add(sun.target);
 
 const daySunOrb = new THREE.Mesh(
   new THREE.SphereGeometry(11, 24, 24),
@@ -182,8 +193,21 @@ scene.add(moonOrb);
 
 const moonLight = new THREE.DirectionalLight(0xd8e7ff, 0.58);
 moonLight.position.set(-120, 220, -80);
+moonLight.castShadow = true;
+moonLight.shadow.mapSize.set(1024, 1024);
+moonLight.shadow.camera.left = -360;
+moonLight.shadow.camera.right = 360;
+moonLight.shadow.camera.top = 360;
+moonLight.shadow.camera.bottom = -360;
+moonLight.shadow.camera.near = 10;
+moonLight.shadow.camera.far = 900;
+moonLight.shadow.bias = -0.00035;
+moonLight.shadow.normalBias = 0.03;
+moonLight.shadow.camera.updateProjectionMatrix();
+moonLight.target.position.set(0, 0, 0);
 moonLight.intensity = 0;
 scene.add(moonLight);
+scene.add(moonLight.target);
 
 const CELESTIAL_ORBIT_RADIUS = 320;
 const CELESTIAL_BASE_Y = 64;

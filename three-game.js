@@ -2092,6 +2092,9 @@ function getBossEnemyTypeForNight(nightNumber) {
     reward: Math.max(1, Math.floor(expectedHordeReward / 2)),
     radius: 18.5,
     color: 0xc58dff,
+    modelTier: 2,
+    modelScale: 2.35,
+    facingOffset: CHARACTER_FACING_OFFSET_BY_TIER[2],
     isBoss: true,
   };
 }
@@ -2129,6 +2132,7 @@ function createBossHealthBar(enemyRadius) {
       color: 0x182536,
       transparent: true,
       opacity: 0.9,
+      depthTest: false,
       depthWrite: false,
     })
   );
@@ -2140,13 +2144,14 @@ function createBossHealthBar(enemyRadius) {
       color: 0x62f59b,
       transparent: true,
       opacity: 0.95,
+      depthTest: false,
       depthWrite: false,
     })
   );
   fillMesh.position.z = 0.03;
   barGroup.add(fillMesh);
 
-  barGroup.position.set(0, enemyRadius + 10, 0);
+  barGroup.position.set(0, enemyRadius + 8.2, 0);
   barGroup.userData.fillMesh = fillMesh;
   barGroup.userData.fillBaseWidth = fillWidth;
   barGroup.userData.bgMesh = bgMesh;
@@ -2206,6 +2211,9 @@ function spawnEnemy() {
   let animationRoot = null;
   if (useCharacterModel) {
     const modelClone = characterPrototype.clone(true);
+    if (Number.isFinite(enemyType.modelScale) && enemyType.modelScale > 0) {
+      modelClone.scale.multiplyScalar(enemyType.modelScale);
+    }
     modelClone.position.set(0, 0.5, 0);
     mesh = new THREE.Group();
     mesh.position.set(x, 0, z);

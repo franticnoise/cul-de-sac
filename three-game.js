@@ -412,12 +412,22 @@ function createLevel1TurretMesh() {
   turretGroup.add(baseMesh);
 
   const coreMesh = new THREE.Mesh(
-    new THREE.CylinderGeometry(4.6, 4.6, 2.2, 20),
+    new THREE.CylinderGeometry(4.8, 4.8, 2.8, 20),
     new THREE.MeshStandardMaterial({ color: TURRET_COLOR_CAMO_DARK, roughness: 0.58, metalness: 0.22 })
   );
-  coreMesh.position.y = 1.3;
+  coreMesh.position.y = 1.5;
   coreMesh.castShadow = true;
   turretGroup.add(coreMesh);
+
+  const domeMesh = new THREE.Mesh(
+    new THREE.SphereGeometry(4.95, 26, 20),
+    new THREE.MeshStandardMaterial({ color: TURRET_COLOR_STEEL, roughness: 0.5, metalness: 0.34 })
+  );
+  domeMesh.scale.y = 0.72;
+  domeMesh.position.y = 3.15;
+  domeMesh.castShadow = true;
+  domeMesh.receiveShadow = true;
+  turretGroup.add(domeMesh);
 
   const recoilGroup = new THREE.Group();
   turretGroup.add(recoilGroup);
@@ -426,7 +436,7 @@ function createLevel1TurretMesh() {
     new THREE.BoxGeometry(2.2, 1.8, 1.7),
     new THREE.MeshStandardMaterial({ color: TURRET_COLOR_STEEL, roughness: 0.48, metalness: 0.42 })
   );
-  neckMesh.position.set(0, 0.8, -5.1);
+  neckMesh.position.set(0, 1.25, -5.1);
   recoilGroup.add(neckMesh);
 
   const barrelShroud = new THREE.Mesh(
@@ -434,7 +444,7 @@ function createLevel1TurretMesh() {
     new THREE.MeshStandardMaterial({ color: TURRET_COLOR_STEEL, roughness: 0.45, metalness: 0.5 })
   );
   barrelShroud.rotation.x = Math.PI / 2;
-  barrelShroud.position.set(0, 1.0, -10.6);
+  barrelShroud.position.set(0, 1.45, -10.6);
   barrelShroud.castShadow = true;
   recoilGroup.add(barrelShroud);
 
@@ -443,7 +453,7 @@ function createLevel1TurretMesh() {
     new THREE.MeshStandardMaterial({ color: TURRET_COLOR_DARK_STEEL, roughness: 0.4, metalness: 0.62 })
   );
   barrelCore.rotation.x = Math.PI / 2;
-  barrelCore.position.set(0, 1.0, -11.7);
+  barrelCore.position.set(0, 1.45, -11.7);
   barrelCore.castShadow = true;
   recoilGroup.add(barrelCore);
 
@@ -452,18 +462,18 @@ function createLevel1TurretMesh() {
     new THREE.MeshStandardMaterial({ color: TURRET_COLOR_LIGHT_STEEL, roughness: 0.42, metalness: 0.55 })
   );
   muzzleTip.rotation.x = Math.PI / 2;
-  muzzleTip.position.set(0, 1.0, -18.2);
+  muzzleTip.position.set(0, 1.45, -18.2);
   muzzleTip.castShadow = true;
   recoilGroup.add(muzzleTip);
 
   const railGeometry = new THREE.BoxGeometry(0.46, 0.36, 6.8);
   const railMaterial = new THREE.MeshStandardMaterial({ color: TURRET_COLOR_LIGHT_STEEL, roughness: 0.45, metalness: 0.5 });
   const railLeft = new THREE.Mesh(railGeometry, railMaterial);
-  railLeft.position.set(-1.0, 1.95, -10.8);
+  railLeft.position.set(-1.0, 2.35, -10.8);
   recoilGroup.add(railLeft);
 
   const railRight = new THREE.Mesh(railGeometry, railMaterial);
-  railRight.position.set(1.0, 1.95, -10.8);
+  railRight.position.set(1.0, 2.35, -10.8);
   recoilGroup.add(railRight);
 
   turretGroup.userData.recoilMesh = recoilGroup;
@@ -476,12 +486,22 @@ function createLevel2TurretMesh() {
   const turretGroup = createLevel1TurretMesh();
   const recoilGroup = turretGroup.userData.recoilMesh || turretGroup;
 
+  const reinforcedDome = new THREE.Mesh(
+    new THREE.SphereGeometry(5.35, 28, 22),
+    new THREE.MeshStandardMaterial({ color: TURRET_COLOR_LIGHT_STEEL, roughness: 0.44, metalness: 0.48 })
+  );
+  reinforcedDome.scale.y = 0.68;
+  reinforcedDome.position.y = 3.55;
+  reinforcedDome.castShadow = true;
+  reinforcedDome.receiveShadow = true;
+  turretGroup.add(reinforcedDome);
+
   const heavyBarrel = new THREE.Mesh(
     new THREE.CylinderGeometry(1.58, 1.58, 13.8, 18),
     new THREE.MeshStandardMaterial({ color: TURRET_COLOR_GUNMETAL, roughness: 0.44, metalness: 0.58 })
   );
   heavyBarrel.rotation.x = Math.PI / 2;
-  heavyBarrel.position.set(0, 1.03, -12.3);
+  heavyBarrel.position.set(0, 1.45, -12.3);
   heavyBarrel.castShadow = true;
   recoilGroup.add(heavyBarrel);
 
@@ -490,7 +510,7 @@ function createLevel2TurretMesh() {
     new THREE.MeshStandardMaterial({ color: TURRET_COLOR_LIGHT_STEEL, roughness: 0.4, metalness: 0.6 })
   );
   heavyMuzzle.rotation.x = Math.PI / 2;
-  heavyMuzzle.position.set(0, 1.03, -19.0);
+  heavyMuzzle.position.set(0, 1.45, -19.0);
   heavyMuzzle.castShadow = true;
   recoilGroup.add(heavyMuzzle);
 
@@ -3189,8 +3209,8 @@ function fireTwinFlakShots(turret, target, speed, totalDamage, penetration = 2) 
 
   createBullet(leftMuzzleX, leftMuzzleZ, target.x, target.z, speed, perShotDamage, "turret", penetration, "flak", 0);
   createBullet(rightMuzzleX, rightMuzzleZ, target.x, target.z, speed, perShotDamage, "turret", penetration, "flak", 0);
-  spawnMuzzleFlash(leftMuzzleX, leftMuzzleZ, dirX, dirZ, "turret");
-  spawnMuzzleFlash(rightMuzzleX, rightMuzzleZ, dirX, dirZ, "turret");
+  spawnMuzzleFlash(leftMuzzleX, leftMuzzleZ, dirX, dirZ, "turret", "mesh");
+  spawnMuzzleFlash(rightMuzzleX, rightMuzzleZ, dirX, dirZ, "turret", "mesh");
 }
 
 function getTurretMuzzleOrigin(turretX, turretZ, dirX, dirZ, projectileType = "smg", mounted = false) {
@@ -3279,8 +3299,7 @@ function updateTurrets(dt) {
           projectileType,
           splashRadius
         );
-        const turretFlashStyle = projectileType === "cannon" ? "mesh" : "sprite";
-        spawnMuzzleFlash(muzzleOrigin.x, muzzleOrigin.z, dirX, dirZ, "turret", turretFlashStyle);
+        spawnMuzzleFlash(muzzleOrigin.x, muzzleOrigin.z, dirX, dirZ, "turret", "mesh");
         if (projectileType === "smg") {
           spawnShellCasingEject("ar15", dirX, dirZ, turret.x, turret.z, 4.8, 1.1, HQ_SHELL_LANDING_Y);
         }
@@ -3317,7 +3336,7 @@ function updateTurrets(dt) {
             "smg",
             0
           );
-          spawnMuzzleFlash(muzzleOrigin.x, muzzleOrigin.z, mountDirX, mountDirZ, "turret");
+          spawnMuzzleFlash(muzzleOrigin.x, muzzleOrigin.z, mountDirX, mountDirZ, "turret", "mesh");
           spawnShellCasingEject("m249", mountDirX, mountDirZ, turret.x, turret.z, 4.9, 1.1, HQ_SHELL_LANDING_Y);
         }
         turret.mountedCooldown = mountedStats.fireRate;

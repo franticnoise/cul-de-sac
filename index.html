@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>cul-de-sac</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header class="top-ui">
+        <div class="clock-wrap">
+          <div class="clock-mainline">
+            <div id="phaseLabel" class="phase day">Day 1</div>
+            <div id="dayClock" class="clock-value">08:00 AM</div>
+          </div>
+        </div>
+
+        <div class="controls-wrap">
+          <span class="controls-label">Speed</span>
+          <button id="pauseBtn" class="util-btn" type="button" title="Pause/Resume">Ⅱ</button>
+          <button class="speed-btn" data-speed="1">1x</button>
+          <button class="speed-btn" data-speed="2">2x</button>
+          <button class="speed-btn" data-speed="4">4x</button>
+          <button id="skipNightBtn" class="util-btn" type="button">Skip to Night</button>
+          <button id="skipCurrentNightBtn" class="util-btn" type="button" hidden>Skip Night</button>
+        </div>
+
+        <div class="night-wrap">
+          <div class="night-line">
+            <span id="nightIcon" class="night-icon sun">🌞</span>
+            <div id="nightTimer" class="night-text">Waiting for night…</div>
+          </div>
+        </div>
+      </header>
+
+      <main>
+        <div class="game-canvas-wrap">
+          <canvas id="gameCanvas" width="1200" height="768" aria-label="Base defense game"></canvas>
+          <div id="startOverlay" class="start-overlay" aria-label="Start game">
+            <div class="start-card">
+              <h1 class="start-title">cul-de-sac</h1>
+              <p class="start-subtitle">Hold the HQ. Survive the nights.</p>
+              <button id="startGameBtn" class="util-btn start-btn" type="button">Start</button>
+            </div>
+          </div>
+          <div id="survivedBanner" class="survived-banner" aria-live="polite">Survived Night #1</div>
+          <div class="canvas-credits-hud">
+            <div id="creditsValue" class="credits-value">
+              <span id="creditsText">Credits: 0</span>
+            </div>
+            <button id="openShopBtn" class="util-btn" type="button">Shop</button>
+          </div>
+          <div id="ammoHud" class="weapon-hud-fps" aria-label="Weapon HUD">
+            <img
+              id="ammoIcon"
+              class="weapon-hud-icon"
+              src="weapon-assets-svg/glock-svgrepo-com.svg"
+              alt="Weapon"
+              aria-hidden="true"
+            />
+            <img
+              id="ammoAttachmentIcon"
+              class="weapon-hud-attachment ammo-attachment-icon"
+              src="weapon-assets-svg/extended-magazine-pistol-svgrepo-com.svg"
+              alt="Attachment"
+              aria-hidden="true"
+            />
+            <div id="weaponHudName" class="weapon-hud-name">Weapon: Glock</div>
+            <div class="weapon-hud-ammo-line">
+              <span id="ammoText">Ammo: 12 / 12</span>
+              <span id="reloadHud" class="reload-hud" aria-label="Reloading progress"></span>
+            </div>
+            <div id="killsHud" class="kills-value weapon-hud-kills">Kills: 0</div>
+          </div>
+          <div class="canvas-bottom-ultimate">
+            <span id="ultimateStatus" class="ultimate-status">Ultimate: Ready</span>
+            <div id="playerHpText" class="player-hp-text">Player HP: 100 / 100</div>
+            <div class="player-hp-track">
+              <div id="playerHpFill" class="player-hp-fill"></div>
+            </div>
+          </div>
+        </div>
+      </main>
+
+      <div class="base-status" aria-label="Base health">
+        <div id="baseHpText" class="base-hp-text">Base Health: 2000 / 2000</div>
+        <div class="base-hp-track">
+          <div id="baseHpFill" class="base-hp-fill"></div>
+        </div>
+      </div>
+    </div>
+
+    <div id="shopModal" class="modal hidden" role="dialog" aria-modal="true" aria-label="Shop">
+      <div class="modal-card">
+        <div class="modal-head">
+          <span class="clock-title">Shop (Daytime Only)</span>
+          <button id="closeShopBtn" class="util-btn" type="button">Close</button>
+        </div>
+        <div class="shop-tabs" role="tablist" aria-label="Shop Sections">
+          <button id="shopTabPlayer" class="shop-tab-btn active" type="button" role="tab" aria-selected="true">Weapons</button>
+          <button id="shopTabBase" class="shop-tab-btn" type="button" role="tab" aria-selected="false">Base</button>
+          <button id="shopTabTurrets" class="shop-tab-btn" type="button" role="tab" aria-selected="false">Turrets</button>
+        </div>
+
+        <section id="shopPanelPlayer" class="shop-tab-panel active" role="tabpanel">
+          <div id="currentWeapon" class="weapon-label">Weapon: Glock</div>
+
+          <div class="shop-group-title">Weapons</div>
+          <div id="shopWeaponList" class="shop-list"></div>
+
+          <div class="shop-group-title">Attachments</div>
+          <div id="shopAttachmentList" class="shop-list"></div>
+        </section>
+
+        <section id="shopPanelBase" class="shop-tab-panel" role="tabpanel" hidden>
+          <div class="shop-group-title">Base Repairs</div>
+          <div id="shopRepairList" class="shop-list"></div>
+
+          <div class="shop-group-title">Base Upgrades</div>
+          <div id="shopBaseUpgradeList" class="shop-list"></div>
+        </section>
+
+        <section id="shopPanelTurrets" class="shop-tab-panel" role="tabpanel" hidden>
+          <div class="shop-group-title">Turrets</div>
+          <div id="shopTurretList" class="shop-list shop-turret-grid"></div>
+        </section>
+      </div>
+    </div>
+
+    <div id="customTooltip" class="custom-tooltip hidden" role="tooltip" aria-hidden="true"></div>
+
+    <div
+      id="gameOverModal"
+      class="modal hidden"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Game over"
+    >
+      <div class="modal-card game-over-card">
+        <h2>Base Destroyed</h2>
+        <div id="gameOverKills" class="game-over-text">Kills: 0</div>
+        <div id="gameOverHighScore" class="game-over-text">High Score: 0</div>
+        <button id="restartBtn" class="util-btn" type="button">Restart</button>
+      </div>
+    </div>
+
+    <script type="module" src="three-game.js"></script>
+  </body>
+</html>

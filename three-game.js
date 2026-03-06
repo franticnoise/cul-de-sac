@@ -1369,28 +1369,30 @@ function loadBaseFencePerimeter() {
       ])
         .then(([outerFenceProto, innerFenceProto, brickWallProto]) => {
           try {
-            baseFenceMainGroup = buildPerimeterRing(outerFenceProto, {
+            const ringBuildOptions = {
               radius: BASE_HQ_RADIUS,
               segmentCount: 40,
               heightY: 0.5,
+            };
+
+            baseFenceMainGroup = buildPerimeterRing(outerFenceProto, {
+              ...ringBuildOptions,
+              yawOffset: -Math.PI * 0.25,
             });
             baseFenceInnerGroup = buildPerimeterRing(innerFenceProto, {
-              radius: BASE_HQ_RADIUS - 6,
-              segmentCount: 40,
-              heightY: 0.5,
+              ...ringBuildOptions,
+              yawOffset: -Math.PI * 0.25,
             });
             baseBrickWallGroup = buildPerimeterRing(brickWallProto, {
-              radius: BASE_HQ_RADIUS + 8,
-              segmentCount: 44,
-              heightY: 0.5,
+              ...ringBuildOptions,
+              yawOffset: -Math.PI * 0.25 + Math.PI/2,
             });
 
             scene.add(baseFenceMainGroup);
             scene.add(baseFenceInnerGroup);
             scene.add(baseBrickWallGroup);
 
-            baseFenceInnerGroup.visible = worldState.baseUpgradeLevel >= 1;
-            baseBrickWallGroup.visible = worldState.baseUpgradeLevel >= 2;
+            applyBaseUpgradeVisuals();
             baseFencePerimeterBuilt = true;
           } catch {
             baseFencePerimeterLoadStarted = false;
@@ -1406,8 +1408,11 @@ function loadBaseFencePerimeter() {
 }
 
 function applyBaseUpgradeVisuals() {
+  if (baseFenceMainGroup) {
+    baseFenceMainGroup.visible = worldState.baseUpgradeLevel <= 0;
+  }
   if (baseFenceInnerGroup) {
-    baseFenceInnerGroup.visible = worldState.baseUpgradeLevel >= 1;
+    baseFenceInnerGroup.visible = worldState.baseUpgradeLevel === 1;
   }
   if (baseBrickWallGroup) {
     baseBrickWallGroup.visible = worldState.baseUpgradeLevel >= 2;

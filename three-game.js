@@ -1005,6 +1005,7 @@ const BASE_FENCE_BORDER_CURVE_MODEL_PATH = "kenney_graveyard-kit_5.0/Models/GLB%
 const BASE_BRICK_WALL_CURVE_MODEL_PATH = "kenney_graveyard-kit_5.0/Models/GLB%20format/brick-wall-curve.glb";
 const CLIP_LARGE_MODEL_PATH = "kenney_blaster-kit_2.1/Models/GLB%20format/clip-large.glb";
 const CLIP_SMALL_MODEL_PATH = "kenney_blaster-kit_2.1/Models/GLB%20format/clip-small.glb";
+const BULLET_FOAM_THICK_MODEL_PATH = "kenney_blaster-kit_2.1/Models/GLB%20format/bullet-foam-thick.glb";
 
 const playerWeaponModels = new Map();
 let gltfLoader = null;
@@ -1038,6 +1039,7 @@ let fieldScatterPropsLoadStarted = false;
 let fieldScatterPropsGroup = null;
 let clipLargePrototype = null;
 let clipSmallPrototype = null;
+let bulletFoamThickPrototype = null;
 let reloadPropsLoadStarted = false;
 const ENEMY_CHARACTER_FACING_OFFSET = Math.PI;
 const ENEMY_MODEL_LOCAL_YAW = Math.PI;
@@ -1968,7 +1970,7 @@ function applyBaseUpgradeVisuals() {
 }
 
 function loadReloadPropsModels() {
-  if (reloadPropsLoadStarted || (clipLargePrototype && clipSmallPrototype)) {
+  if (reloadPropsLoadStarted || (clipLargePrototype && clipSmallPrototype && bulletFoamThickPrototype)) {
     return;
   }
   reloadPropsLoadStarted = true;
@@ -2021,6 +2023,9 @@ function loadReloadPropsModels() {
       loadClip(CLIP_SMALL_MODEL_PATH, (model) => {
         clipSmallPrototype = model;
       });
+      loadClip(BULLET_FOAM_THICK_MODEL_PATH, (model) => {
+        bulletFoamThickPrototype = model;
+      });
     })
     .catch(() => {
       reloadPropsLoadStarted = false;
@@ -2046,6 +2051,14 @@ const worldState = {
   totalNightEnemies: 0,
   defeatedThisNight: 0,
   spawnAccumulator: 0,
+  secondWavePending: 0,
+  secondWaveTimer: 0,
+  thirdWavePending: 0,
+  thirdWaveTimer: 0,
+  fourthWavePending: 0,
+  fourthWaveTimer: 0,
+  fifthWavePending: 0,
+  fifthWaveTimer: 0,
   timeScaleDay: 1,
   baseUpgradeLevel: 0,
   activeShopTab: "player",
@@ -2524,7 +2537,7 @@ function getBaseNightEnemyCount(nightNumber) {
 
 function getNightEnemyTierChances(nightNumber) {
   const level4Chance = nightNumber >= 20 ? Math.min(0.22, 0.08 + (nightNumber - 20) * 0.0025) : 0;
-  const level3Chance = nightNumber >= 6 ? 0.22 : 0;
+  const level3Chance = nightNumber >= 10 ? Math.min(0.22, 0.08 + (nightNumber - 10) * 0.02) : 0;
   const level2Chance = nightNumber >= 3 ? 0.23 : 0;
   const level1Chance = Math.max(0, 1 - level4Chance - level3Chance - level2Chance);
   return {
@@ -2938,6 +2951,10 @@ function spawnEnemy() {
     shamblePhase: Math.random() * Math.PI * 2,
     walkBaseY: useCharacterModel ? 0 : enemyType.radius + 0.5,
     dustTimer: 0.015 + Math.random() * 0.03,
+    hitReactTime: 0,
+    hitReactDuration: 0.12,
+    hitTiltX: 0,
+    hitTiltZ: 0,
     animationMixer,
     animationRoot,
     bossHpBar,
@@ -2981,6 +2998,38 @@ function spawnImpactEffect(x, z, radius, colorHex, maxLife = 0.24, baseOpacity =
   scene.add(mesh);
 
   impactEffects.push({ mesh, life: maxLife, maxLife, growth: 1.65, baseOpacity });
+}
+
+function spawnHitPolygonEffect(x, z, y = 0.5, facingYaw = 0) {
+  const count = 2;
+  for (let i = 0; i < count; i += 1) {
+    const segments = 3 + Math.floor(Math.random() * 4);
+    const size = THREE.MathUtils.randFloat(1.1, 2.0);
+    const colorHex = Math.random() < 0.5 ? 0xff3a3a : 0x6dff74;
+    const mesh = new THREE.Mesh(
+      new THREE.CircleGeometry(size, segments),
+      new THREE.MeshBasicMaterial({
+        color: colorHex,
+        transparent: true,
+        opacity: 0.98,
+        depthWrite: false,
+        depthTest: false,
+        blending: THREE.AdditiveBlending,
+        side: THREE.DoubleSide,
+      })
+    );
+    mesh.rotation.x = Math.PI * 0.5;
+    mesh.rotation.y = facingYaw + THREE.MathUtils.randFloatSpread(0.55);
+    mesh.rotation.z = THREE.MathUtils.randFloatSpread(0.4);
+    mesh.position.set(
+      x + THREE.MathUtils.randFloatSpread(0.9),
+      y + THREE.MathUtils.randFloatSpread(0.55),
+      z + THREE.MathUtils.randFloatSpread(0.9)
+    );
+    mesh.renderOrder = 12;
+    scene.add(mesh);
+    impactEffects.push({ mesh, life: 0.34, maxLife: 0.34, growth: 0.9, baseOpacity: 0.98 });
+  }
 }
 
 function spawnCannonBlastEffect(x, z, radius) {
@@ -3030,7 +3079,7 @@ function spawnCannonBlastEffect(x, z, radius) {
   }
 
   // Reuse the shard physics/fade system used by enemy death chunks.
-  enemyDeathEffects.push({ particles, life: 2.6, maxLife: 2.6 });
+  enemyDeathEffects.push({ effectType: "burst", particles, life: 2.6, maxLife: 2.6 });
 }
 
 function spawnCannonScorchMark(x, z, radius) {
@@ -3090,10 +3139,12 @@ function spawnEnemyDeathExplosion(enemy) {
       rvz: THREE.MathUtils.randFloatSpread(9),
       grounded: false,
       groundY: 0.13 + Math.random() * 0.05,
+      fadeTimer: ZOMBIE_SPLATTER_FADE_DURATION,
+      fadeDuration: ZOMBIE_SPLATTER_FADE_DURATION,
     });
   }
 
-  enemyDeathEffects.push({ particles, life: 2.2, maxLife: 2.2 });
+  enemyDeathEffects.push({ effectType: "death", particles, life: 0, maxLife: 0 });
 }
 
 function spawnZombieSplatter(x, z, enemyRadius = 6.5) {
@@ -3186,7 +3237,7 @@ function isPistolWeapon(weaponId) {
 }
 
 function isShellEjectWeapon(weaponId) {
-  return isMachineGunWeapon(weaponId) || isPistolWeapon(weaponId);
+  return isMachineGunWeapon(weaponId) || isPistolWeapon(weaponId) || weaponId === "cannon";
 }
 
 function createReloadClipMesh(weaponId) {
@@ -3228,6 +3279,7 @@ function spawnReloadClipEject(weaponId) {
     spinY: 8 + Math.random() * 4,
     spinZ: 7 + Math.random() * 3,
     grounded: false,
+    landingY: HQ_SHELL_LANDING_Y,
     groundHoldTimer: EJECTED_PROP_GROUND_HOLD,
     fadeTimer: EJECTED_PROP_FADE_DURATION,
     fadeDuration: EJECTED_PROP_FADE_DURATION,
@@ -3249,7 +3301,33 @@ function spawnShellCasingEject(
     return;
   }
 
-  const shellMesh = new THREE.Mesh(shellCasingGeometry, shellCasingMaterial.clone());
+  const isCannon = weaponId === "cannon";
+  const shellMesh = isCannon && bulletFoamThickPrototype
+    ? bulletFoamThickPrototype.clone(true)
+    : new THREE.Mesh(shellCasingGeometry, shellCasingMaterial.clone());
+  if (isCannon) {
+    // Cannon casing is intentionally much larger than regular AR/MG casings.
+    shellMesh.scale.setScalar(3.2);
+    shellMesh.traverse?.((node) => {
+      if (node.isMesh) {
+        node.castShadow = true;
+        node.receiveShadow = false;
+        node.material = Array.isArray(node.material)
+          ? node.material.map((m) => (m?.clone ? m.clone() : m))
+          : node.material?.clone?.() || node.material;
+        if (Array.isArray(node.material)) {
+          node.material.forEach((m) => {
+            if (!m) return;
+            m.transparent = true;
+            m.opacity = 1;
+          });
+        } else if (node.material) {
+          node.material.transparent = true;
+          node.material.opacity = 1;
+        }
+      }
+    });
+  }
   shellMesh.renderOrder = 4;
   const sideX = -shotDirZ;
   const sideZ = shotDirX;
@@ -3258,10 +3336,18 @@ function spawnShellCasingEject(
   scene.add(shellMesh);
 
   const isPistol = isPistolWeapon(weaponId);
-  const lateralSpeed = isPistol ? 17 + Math.random() * 8 : 24 + Math.random() * 14;
-  const forwardPush = isPistol ? 2.5 : 4;
-  const upSpeed = isPistol ? 11 + Math.random() * 5 : 16 + Math.random() * 8;
-  const spinScale = isPistol ? 0.7 : 1;
+  const lateralSpeed = isCannon
+    ? 22 + Math.random() * 10
+    : isPistol
+      ? 17 + Math.random() * 8
+      : 24 + Math.random() * 14;
+  const forwardPush = isCannon ? 2.6 : isPistol ? 2.5 : 4;
+  const upSpeed = isCannon
+    ? 14 + Math.random() * 5
+    : isPistol
+      ? 11 + Math.random() * 5
+      : 16 + Math.random() * 8;
+  const spinScale = isCannon ? 0.7 : isPistol ? 0.7 : 1;
 
   ejectedShellCasings.push({
     mesh: shellMesh,
@@ -3276,6 +3362,7 @@ function spawnShellCasingEject(
     groundHoldTimer: EJECTED_PROP_GROUND_HOLD,
     fadeTimer: EJECTED_PROP_FADE_DURATION,
     fadeDuration: EJECTED_PROP_FADE_DURATION,
+    disposeOnRemove: isCannon,
   });
 }
 
@@ -3310,8 +3397,8 @@ function updateEjectedProps(dt) {
       prop.mesh.rotation.y += prop.spinY * dt;
       prop.mesh.rotation.z += prop.spinZ * dt;
 
-      if (prop.mesh.position.y < 0.2) {
-        prop.mesh.position.y = 0.2;
+      if (prop.mesh.position.y < prop.landingY) {
+        prop.mesh.position.y = prop.landingY;
         prop.grounded = true;
         prop.vx = 0;
         prop.vz = 0;
@@ -3376,12 +3463,25 @@ function updateEjectedProps(dt) {
     }
 
     const shellAlpha = shell.groundHoldTimer > 0 ? 1 : Math.max(0, shell.fadeTimer / shell.fadeDuration);
-    shell.mesh.material.opacity = shellAlpha;
-    shell.mesh.material.transparent = true;
+    setMeshTreeOpacity(shell.mesh, shellAlpha);
 
     if (shell.fadeTimer <= 0) {
       scene.remove(shell.mesh);
-      shell.mesh.material.dispose();
+      if (shell.disposeOnRemove) {
+        shell.mesh.traverse?.((node) => {
+          if (!node.isMesh) {
+            return;
+          }
+          node.geometry?.dispose?.();
+          if (Array.isArray(node.material)) {
+            node.material.forEach((material) => material?.dispose?.());
+          } else {
+            node.material?.dispose?.();
+          }
+        });
+      } else {
+        shell.mesh.material.dispose();
+      }
       ejectedShellCasings.splice(index, 1);
     }
   }
@@ -3438,9 +3538,59 @@ function updateCannonScorchMarks(dt) {
 function updateEnemyDeathEffects(dt) {
   for (let index = enemyDeathEffects.length - 1; index >= 0; index -= 1) {
     const effect = enemyDeathEffects[index];
+    if (effect.effectType === "death") {
+      for (let p = effect.particles.length - 1; p >= 0; p -= 1) {
+        const particle = effect.particles[p];
+        if (!particle.grounded) {
+          particle.vx *= Math.max(0, 1 - dt * 1.8);
+          particle.vz *= Math.max(0, 1 - dt * 1.8);
+          particle.vy -= 58 * dt;
+          particle.mesh.position.x += particle.vx * dt;
+          particle.mesh.position.y += particle.vy * dt;
+          particle.mesh.position.z += particle.vz * dt;
+
+          if (particle.mesh.position.y <= particle.groundY) {
+            particle.mesh.position.y = particle.groundY;
+            particle.grounded = true;
+            particle.vx *= 0.18;
+            particle.vz *= 0.18;
+            particle.vy = 0;
+          }
+          particle.mesh.material.opacity = 0.95;
+        } else {
+          particle.vx *= Math.max(0, 1 - dt * 4.2);
+          particle.vz *= Math.max(0, 1 - dt * 4.2);
+          particle.mesh.position.x += particle.vx * dt;
+          particle.mesh.position.z += particle.vz * dt;
+
+          const flattenSpeed = 0.8;
+          particle.mesh.scale.y = Math.max(0.18, particle.mesh.scale.y * (1 - dt * flattenSpeed));
+          particle.fadeTimer -= dt;
+          const groundedAlpha = Math.max(0, particle.fadeTimer / particle.fadeDuration);
+          particle.mesh.material.opacity = 0.74 * groundedAlpha;
+
+          if (particle.fadeTimer <= 0) {
+            scene.remove(particle.mesh);
+            particle.mesh.geometry.dispose();
+            particle.mesh.material.dispose();
+            effect.particles.splice(p, 1);
+            continue;
+          }
+        }
+
+        particle.mesh.rotation.x += particle.rvx * dt;
+        particle.mesh.rotation.y += particle.rvy * dt;
+        particle.mesh.rotation.z += particle.rvz * dt;
+      }
+
+      if (effect.particles.length === 0) {
+        enemyDeathEffects.splice(index, 1);
+      }
+      continue;
+    }
+
     effect.life -= dt;
     const alpha = Math.max(0, effect.life / effect.maxLife);
-
     effect.particles.forEach((particle) => {
       if (!particle.grounded) {
         particle.vx *= Math.max(0, 1 - dt * 1.8);
@@ -3462,15 +3612,12 @@ function updateEnemyDeathEffects(dt) {
         particle.vz *= Math.max(0, 1 - dt * 4.2);
         particle.mesh.position.x += particle.vx * dt;
         particle.mesh.position.z += particle.vz * dt;
-
-        const flattenSpeed = 0.8;
-        particle.mesh.scale.y = Math.max(0.18, particle.mesh.scale.y * (1 - dt * flattenSpeed));
       }
 
       particle.mesh.rotation.x += particle.rvx * dt;
       particle.mesh.rotation.y += particle.rvy * dt;
       particle.mesh.rotation.z += particle.rvz * dt;
-      particle.mesh.material.opacity = (particle.grounded ? 0.7 : 0.95) * alpha;
+      particle.mesh.material.opacity = 0.9 * alpha;
     });
 
     if (effect.life <= 0) {
@@ -3741,7 +3888,7 @@ function createBullet(
   const vz = (dz / len) * speed;
 
   const mesh = new THREE.Mesh(bulletGeometry, getBulletMaterial(projectileType, owner));
-  if (owner === "turret" && projectileType === "smg") {
+  if (owner === "player" || (owner === "turret" && projectileType === "smg")) {
     mesh.scale.setScalar(0.5);
   }
   mesh.position.set(originX, owner === "player" ? 12 : 4.8, originZ);
@@ -3860,14 +4007,43 @@ function updateProjectiles(container, dt) {
       if (Math.hypot(dx, dz) <= enemy.radius + bullet.radius) {
         enemy.hp -= bullet.damage;
         bullet.pierced.add(enemy);
+        const hitY = enemy.isCharacterModel ? enemy.walkBaseY + enemy.radius * 1.35 : enemy.radius + 1.8;
+        const hitFacing = enemy.facingYaw || 0;
+
+        const shotSpeed = Math.hypot(bullet.vx, bullet.vz) || 1;
+        const shotDirX = bullet.vx / shotSpeed;
+        const shotDirZ = bullet.vz / shotSpeed;
+        const baseKick = bullet.projectileType === "cannon"
+          ? 0.34
+          : bullet.projectileType === "grenade"
+            ? 0.26
+            : bullet.projectileType === "flak"
+              ? 0.21
+              : 0.15;
+        const damageKick = THREE.MathUtils.clamp(bullet.damage / 75, 0.65, 1.55);
+        const bossDampen = enemy.isBoss ? 0.45 : 1;
+        const reactKick = baseKick * damageKick * bossDampen;
+        enemy.hitReactDuration = 0.12;
+        enemy.hitReactTime = enemy.hitReactDuration;
+        enemy.hitTiltX = THREE.MathUtils.clamp(
+          (enemy.hitTiltX || 0) + (-shotDirZ + THREE.MathUtils.randFloatSpread(0.16)) * reactKick,
+          -0.34,
+          0.34
+        );
+        enemy.hitTiltZ = THREE.MathUtils.clamp(
+          (enemy.hitTiltZ || 0) + (shotDirX + THREE.MathUtils.randFloatSpread(0.16)) * reactKick,
+          -0.34,
+          0.34
+        );
+
         if (enemy.hp <= 0) {
           removeEnemy(enemy);
         }
 
         if (bullet.projectileType === "flak") {
-          spawnImpactEffect(bullet.x, bullet.z, 3.2, 0x66e7ff, 0.16);
+          spawnHitPolygonEffect(bullet.x, bullet.z, hitY, hitFacing);
         } else if (bullet.projectileType === "grenade") {
-          spawnImpactEffect(bullet.x, bullet.z, Math.max(8, bullet.splashRadius), 0xffb86a, 0.28);
+          spawnHitPolygonEffect(bullet.x, bullet.z, hitY, hitFacing);
           applyAreaDamage(bullet.x, bullet.z, bullet.splashRadius, bullet.damage);
           hit = true;
           break;
@@ -3879,13 +4055,7 @@ function updateProjectiles(container, dt) {
           hit = true;
           break;
         } else {
-          const impactColor =
-            bullet.owner === "turret" && bullet.projectileType === "smg"
-              ? 0xff4f5c
-              : bullet.owner === "player"
-                ? 0xff8f57
-                : 0x86ff6f;
-          spawnImpactEffect(bullet.x, bullet.z, 2.6, impactColor, 0.14);
+          spawnHitPolygonEffect(bullet.x, bullet.z, hitY, hitFacing);
         }
 
         if (bullet.penetration > 0) {
@@ -3911,6 +4081,15 @@ function updateProjectiles(container, dt) {
 
 function updateEnemies(dt) {
   enemies.forEach((enemy) => {
+    if ((enemy.hitReactTime || 0) > 0) {
+      enemy.hitReactTime = Math.max(0, enemy.hitReactTime - dt);
+    }
+    enemy.hitTiltX = (enemy.hitTiltX || 0) * Math.max(0, 1 - dt * 14);
+    enemy.hitTiltZ = (enemy.hitTiltZ || 0) * Math.max(0, 1 - dt * 14);
+    const hitReactAlpha = (enemy.hitReactDuration || 0) > 0
+      ? Math.max(0, (enemy.hitReactTime || 0) / enemy.hitReactDuration)
+      : 0;
+
     const dx = -enemy.x;
     const dz = -enemy.z;
     const dist = Math.hypot(dx, dz) || 1;
@@ -4022,6 +4201,8 @@ function updateEnemies(dt) {
     if (enemy.isCharacterModel) {
       const yawSway = Math.sin(enemy.shamblePhase * 1.5) * ENEMY_SHAMBLE_YAW_SWAY;
       enemy.mesh.rotation.y = enemy.facingYaw + yawSway;
+      enemy.mesh.rotation.x = enemy.hitTiltX * hitReactAlpha;
+      enemy.mesh.rotation.z = enemy.hitTiltZ * hitReactAlpha;
     }
 
     if (enemy.bossHpBar) {
@@ -4152,6 +4333,9 @@ function updateTurrets(dt) {
         spawnMuzzleFlash(muzzleOrigin.x, muzzleOrigin.z, dirX, dirZ, "turret", "mesh");
         if (projectileType === "smg") {
           spawnShellCasingEject("ar15", dirX, dirZ, turret.x, turret.z, 4.8, 1.1, HQ_SHELL_LANDING_Y);
+        } else if (projectileType === "cannon") {
+          const cannonShellOrigin = getTurretMuzzleOrigin(turret.x, turret.z, dirX, dirZ, "cannon", false);
+          spawnShellCasingEject("cannon", dirX, dirZ, cannonShellOrigin.x, cannonShellOrigin.z, 6.4, 3.2, HQ_SHELL_LANDING_Y);
         }
       }
 
@@ -4465,8 +4649,22 @@ function resetPrototype() {
   });
   ejectedShellCasings.splice(0).forEach((shell) => {
     scene.remove(shell.mesh);
-    shell.mesh.geometry.dispose();
-    shell.mesh.material.dispose();
+    if (shell.disposeOnRemove) {
+      shell.mesh.traverse?.((node) => {
+        if (!node.isMesh) {
+          return;
+        }
+        node.geometry?.dispose?.();
+        if (Array.isArray(node.material)) {
+          node.material.forEach((material) => material?.dispose?.());
+        } else {
+          node.material?.dispose?.();
+        }
+      });
+    } else {
+      shell.mesh.geometry.dispose();
+      shell.mesh.material.dispose();
+    }
   });
   ultimateWaves.splice(0).forEach((wave) => {
     scene.remove(wave.mesh);
@@ -4483,6 +4681,14 @@ function resetPrototype() {
   worldState.dayTimer = 0;
   worldState.nightTimer = 0;
   worldState.spawnAccumulator = 0;
+  worldState.secondWavePending = 0;
+  worldState.secondWaveTimer = 0;
+  worldState.thirdWavePending = 0;
+  worldState.thirdWaveTimer = 0;
+  worldState.fourthWavePending = 0;
+  worldState.fourthWaveTimer = 0;
+  worldState.fifthWavePending = 0;
+  worldState.fifthWaveTimer = 0;
   worldState.spawnedThisNight = 0;
   worldState.totalNightEnemies = 0;
   worldState.defeatedThisNight = 0;
@@ -4497,8 +4703,9 @@ function resetPrototype() {
   base.maxHp = BASE_HP_TIERS[0];
   base.hp = BASE_HP_TIERS[0];
   turrets.forEach((turret) => {
-    turret.owned = false;
-    turret.level = 0;
+    const startsOwned = turret.label === "Middle";
+    turret.owned = startsOwned;
+    turret.level = startsOwned ? 1 : 0;
     turret.cooldown = 0;
     turret.mountedCooldown = 0;
     turret.turretRecoil = 0;
@@ -4548,11 +4755,46 @@ function startNight() {
   worldState.defeatedThisNight = 0;
   worldState.totalNightEnemies = worldState.isBossWave ? 2 : getBaseNightEnemyCount(worldState.nightNumber);
   worldState.spawnAccumulator = 0;
+  worldState.secondWavePending = 0;
+  worldState.secondWaveTimer = 0;
+  worldState.thirdWavePending = 0;
+  worldState.thirdWaveTimer = 0;
+  worldState.fourthWavePending = 0;
+  worldState.fourthWaveTimer = 0;
+  worldState.fifthWavePending = 0;
+  worldState.fifthWaveTimer = 0;
   worldState.timeScaleDay = 1;
   if (!worldState.ultimate.hasStarted) {
     worldState.ultimate.hasStarted = true;
     worldState.ultimate.timer = worldState.ultimate.cooldown;
   }
+
+  // Spawn in five waves to smooth pressure over the night.
+  const firstWaveCount = Math.ceil(worldState.totalNightEnemies / 5);
+  const remainingAfterFirst = Math.max(0, worldState.totalNightEnemies - firstWaveCount);
+  const secondWaveCount = Math.ceil(remainingAfterFirst / 4);
+  const remainingAfterSecond = Math.max(0, remainingAfterFirst - secondWaveCount);
+  const thirdWaveCount = Math.ceil(remainingAfterSecond / 3);
+  const remainingAfterThird = Math.max(0, remainingAfterSecond - thirdWaveCount);
+  const fourthWaveCount = Math.ceil(remainingAfterThird / 2);
+  const fifthWaveCount = Math.max(
+    0,
+    worldState.totalNightEnemies - firstWaveCount - secondWaveCount - thirdWaveCount - fourthWaveCount
+  );
+
+  for (let index = 0; index < firstWaveCount; index += 1) {
+    spawnEnemy();
+  }
+  worldState.spawnedThisNight = firstWaveCount;
+  worldState.secondWavePending = secondWaveCount;
+  worldState.secondWaveTimer = secondWaveCount > 0 ? 4 : 0;
+  worldState.thirdWavePending = thirdWaveCount;
+  worldState.thirdWaveTimer = thirdWaveCount > 0 ? 8 : 0;
+  worldState.fourthWavePending = fourthWaveCount;
+  worldState.fourthWaveTimer = fourthWaveCount > 0 ? 12 : 0;
+  worldState.fifthWavePending = fifthWaveCount;
+  worldState.fifthWaveTimer = fifthWaveCount > 0 ? 16 : 0;
+
   applyPhaseVisuals("night");
   setShopModalOpen(false);
 }
@@ -4630,8 +4872,22 @@ function clearProjectilesAndEffects() {
   });
   ejectedShellCasings.splice(0).forEach((shell) => {
     scene.remove(shell.mesh);
-    shell.mesh.geometry.dispose();
-    shell.mesh.material.dispose();
+    if (shell.disposeOnRemove) {
+      shell.mesh.traverse?.((node) => {
+        if (!node.isMesh) {
+          return;
+        }
+        node.geometry?.dispose?.();
+        if (Array.isArray(node.material)) {
+          node.material.forEach((material) => material?.dispose?.());
+        } else {
+          node.material?.dispose?.();
+        }
+      });
+    } else {
+      shell.mesh.geometry.dispose();
+      shell.mesh.material.dispose();
+    }
   });
 }
 
@@ -4841,12 +5097,61 @@ function tick(now) {
     } else {
       worldState.nightTimer = Math.max(0, worldState.nightTimer - scaledDt);
       worldState.spawnAccumulator += scaledDt;
+
+      if (worldState.secondWavePending > 0) {
+        worldState.secondWaveTimer = Math.max(0, worldState.secondWaveTimer - scaledDt);
+        if (worldState.secondWaveTimer <= 0) {
+          for (let waveIndex = 0; waveIndex < worldState.secondWavePending; waveIndex += 1) {
+            spawnEnemy();
+          }
+          worldState.spawnedThisNight += worldState.secondWavePending;
+          worldState.secondWavePending = 0;
+        }
+      }
+
+      if (worldState.thirdWavePending > 0) {
+        worldState.thirdWaveTimer = Math.max(0, worldState.thirdWaveTimer - scaledDt);
+        if (worldState.thirdWaveTimer <= 0) {
+          for (let waveIndex = 0; waveIndex < worldState.thirdWavePending; waveIndex += 1) {
+            spawnEnemy();
+          }
+          worldState.spawnedThisNight += worldState.thirdWavePending;
+          worldState.thirdWavePending = 0;
+        }
+      }
+
+      if (worldState.fourthWavePending > 0) {
+        worldState.fourthWaveTimer = Math.max(0, worldState.fourthWaveTimer - scaledDt);
+        if (worldState.fourthWaveTimer <= 0) {
+          for (let waveIndex = 0; waveIndex < worldState.fourthWavePending; waveIndex += 1) {
+            spawnEnemy();
+          }
+          worldState.spawnedThisNight += worldState.fourthWavePending;
+          worldState.fourthWavePending = 0;
+        }
+      }
+
+      if (worldState.fifthWavePending > 0) {
+        worldState.fifthWaveTimer = Math.max(0, worldState.fifthWaveTimer - scaledDt);
+        if (worldState.fifthWaveTimer <= 0) {
+          for (let waveIndex = 0; waveIndex < worldState.fifthWavePending; waveIndex += 1) {
+            spawnEnemy();
+          }
+          worldState.spawnedThisNight += worldState.fifthWavePending;
+          worldState.fifthWavePending = 0;
+        }
+      }
+
       const baseSpawnRate = Math.max(0.12, 0.78 - (worldState.nightNumber - 1) * 0.032);
       const remainingCount = Math.max(0, worldState.totalNightEnemies - worldState.spawnedThisNight);
       const remainingTime = Math.max(0.01, worldState.nightTimer);
       const requiredInterval = remainingCount > 0 ? remainingTime / remainingCount : baseSpawnRate;
       const spawnRate = Math.max(0.035, Math.min(baseSpawnRate, requiredInterval * 0.92));
       while (
+        worldState.secondWavePending <= 0 &&
+        worldState.thirdWavePending <= 0 &&
+        worldState.fourthWavePending <= 0 &&
+        worldState.fifthWavePending <= 0 &&
         worldState.spawnAccumulator >= spawnRate &&
         worldState.spawnedThisNight < worldState.totalNightEnemies
       ) {
@@ -4916,8 +5221,9 @@ turrets.forEach((turret, index) => {
   turret.level4Mesh.userData.turretId = index;
   turret.level5Mesh.userData.turretId = index;
   turret.level6Mesh.userData.turretId = index;
-  turret.owned = false;
-  turret.level = 0;
+  const startsOwned = turret.label === "Middle";
+  turret.owned = startsOwned;
+  turret.level = startsOwned ? 1 : 0;
   turret.mountedCooldown = 0;
   turret.turretRecoil = 0;
   turret.aimYaw = turretSlotYawByLabel[turret.label] ?? -Math.PI / 2;

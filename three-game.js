@@ -77,19 +77,30 @@ cameraLegendEl.style.pointerEvents = "none";
 cameraLegendEl.style.whiteSpace = "pre-line";
 cameraLegendEl.textContent = "Mouse Controls\nWheel: Zoom\nLMB + Drag: Tilt/Orbit\nMMB Click: Reset Angle";
 
+const woodHudEl = document.createElement("div");
+woodHudEl.id = "woodHud";
+woodHudEl.style.color = "#f6e6c8";
+woodHudEl.style.font = "700 12px Inter, system-ui, sans-serif";
+woodHudEl.style.pointerEvents = "none";
+woodHudEl.style.whiteSpace = "nowrap";
+woodHudEl.textContent = "Wood: 0 | Stone: 0 | Backpack: 0/20";
+
 const canvasWrapEl = canvas.parentElement;
 if (canvasWrapEl && getComputedStyle(canvasWrapEl).position === "static") {
   canvasWrapEl.style.position = "relative";
 }
 canvasWrapEl?.appendChild(enemiesLeftEl);
 canvasWrapEl?.appendChild(cameraLegendEl);
+const canvasCreditsHudEl = openShopBtn?.parentElement;
+canvasCreditsHudEl?.insertBefore(woodHudEl, openShopBtn);
 
 phaseLabelEl.className = "phase day";
 dayClockEl.textContent = "08:00 AM";
 nightTimerEl.textContent = "Night in 90s";
-ultimateStatusEl.textContent = "Ultimate: starts Night 1";
+ultimateStatusEl.textContent = "Ultimate: No targets";
 creditsTextEl.textContent = "Credits: 0";
 ammoTextEl.textContent = "Ammo: 14 / 14";
+woodHudEl.textContent = "Wood: 0 | Stone: 0 | Backpack: 0/20";
 
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
@@ -294,7 +305,10 @@ ground.receiveShadow = true;
 scene.add(ground);
 
 const BASE_HQ_RADIUS = 90;
-const BASE_HP_TIERS = [2000, 3000, 4000];
+const CAMERA_HQ_STAY_RADIUS = BASE_HQ_RADIUS + 16;
+const CAMERA_FOLLOW_DEADZONE = 78;
+const CAMERA_FOLLOW_LERP = 4.6;
+const BASE_HP_TIERS = [2000, 3000, 4000, 5000];
 
 const base = {
   hp: BASE_HP_TIERS[0],
@@ -304,9 +318,15 @@ const base = {
 
 const baseMesh = new THREE.Mesh(
   new THREE.CylinderGeometry(base.radius, base.radius, 1.6, 48),
-  new THREE.MeshStandardMaterial({ color: 0x2f4463, roughness: 0.8 })
+  new THREE.MeshStandardMaterial({
+    color: 0x2f4463,
+    roughness: 0.8,
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+    polygonOffsetUnits: -2,
+  })
 );
-baseMesh.position.set(0, 0.8, 0);
+baseMesh.position.set(0, -0.78, 0);
 baseMesh.receiveShadow = true;
 baseMesh.castShadow = true;
 scene.add(baseMesh);
@@ -317,6 +337,7 @@ const player = {
   z: 34,
   facingYaw: 0,
   desiredFacingYaw: 0,
+  dustTimer: 0,
   speed: 170,
   hp: 100,
   maxHp: 100,
@@ -329,6 +350,9 @@ const player = {
 const PLAYER_VISUAL_Y = 12;
 const PLAYER_FACING_OFFSET = Math.PI;
 const PLAYER_TURN_SPEED = 7.6;
+const PLAYER_DUST_EMIT_INTERVAL_MIN = 0.022;
+const PLAYER_DUST_EMIT_INTERVAL_VARIANCE = 0.014;
+const PLAYER_DUST_PUFFS_PER_EMIT = 2;
 let playerCharacterModel = null;
 
 const playerMesh = new THREE.Group();
@@ -347,6 +371,85 @@ const playerWeaponMount = new THREE.Group();
 playerWeaponMount.position.set(4, 0, -2);
 playerWeaponMount.rotation.set(0.18, 0, 0);
 playerMesh.add(playerWeaponMount);
+function createSpeechBubbleSprite(text) {
+  const bubbleCanvas = document.createElement("canvas");
+  bubbleCanvas.width = 300;
+  bubbleCanvas.height = 120;
+  const ctx = bubbleCanvas.getContext("2d");
+  ctx.fillStyle = "rgba(10, 14, 20, 0.88)";
+  ctx.strokeStyle = "rgba(241, 244, 248, 0.95)";
+  ctx.lineWidth = 5;
+  const radius = 16;
+  ctx.beginPath();
+  ctx.moveTo(radius, 8);
+  ctx.lineTo(bubbleCanvas.width - radius, 8);
+  ctx.quadraticCurveTo(bubbleCanvas.width - 8, 8, bubbleCanvas.width - 8, radius);
+  ctx.lineTo(bubbleCanvas.width - 8, bubbleCanvas.height - 30 - radius);
+  ctx.quadraticCurveTo(bubbleCanvas.width - 8, bubbleCanvas.height - 30 - 8, bubbleCanvas.width - radius, bubbleCanvas.height - 30 - 8);
+  ctx.lineTo(170, bubbleCanvas.height - 38);
+  ctx.lineTo(150, bubbleCanvas.height - 8);
+  ctx.lineTo(130, bubbleCanvas.height - 38);
+  ctx.lineTo(radius, bubbleCanvas.height - 38);
+  ctx.quadraticCurveTo(8, bubbleCanvas.height - 38, 8, bubbleCanvas.height - 38 - radius);
+  ctx.lineTo(8, radius);
+  ctx.quadraticCurveTo(8, 8, radius, 8);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.font = "bold 36px Inter, sans-serif";
+  ctx.fillStyle = "#f4f7fb";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(text, bubbleCanvas.width * 0.5, bubbleCanvas.height * 0.42);
+
+  const texture = new THREE.CanvasTexture(bubbleCanvas);
+  texture.needsUpdate = true;
+  const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false });
+  const sprite = new THREE.Sprite(material);
+  sprite.scale.set(18, 7.2, 1);
+  return sprite;
+}
+
+const playerSpeechBubble = {
+  sprite: null,
+  timer: 0,
+};
+
+const playerAxeMount = new THREE.Group();
+playerAxeMount.position.set(4.2, 0.2, -1.6);
+playerAxeMount.rotation.y = Math.PI * 0.5;
+playerAxeMount.scale.setScalar(2);
+playerAxeMount.visible = false;
+playerMesh.add(playerAxeMount);
+
+const playerAxeHandle = new THREE.Mesh(
+  new THREE.CylinderGeometry(0.18, 0.24, 6.2, 10),
+  new THREE.MeshStandardMaterial({ color: 0x8b6a46, roughness: 0.82, metalness: 0.08 })
+);
+playerAxeHandle.castShadow = true;
+playerAxeMount.add(playerAxeHandle);
+
+const playerAxeHead = new THREE.Mesh(
+  new THREE.BoxGeometry(1.3, 0.9, 0.55),
+  new THREE.MeshStandardMaterial({ color: 0x9ca7b4, roughness: 0.42, metalness: 0.68 })
+);
+playerAxeHead.position.set(0.72, 2.55, 0);
+playerAxeHead.castShadow = true;
+playerAxeMount.add(playerAxeHead);
+
+const playerPickSpike = new THREE.Mesh(
+  new THREE.ConeGeometry(0.24, 1.4, 10),
+  new THREE.MeshStandardMaterial({ color: 0xaab3be, roughness: 0.4, metalness: 0.7 })
+);
+playerPickSpike.rotation.z = Math.PI * 0.5;
+playerPickSpike.position.set(-0.85, 2.55, 0);
+playerPickSpike.castShadow = true;
+playerAxeMount.add(playerPickSpike);
+
+const carriedLogsMount = new THREE.Group();
+carriedLogsMount.position.set(-4.8, 2.4, 1.8);
+playerMesh.add(carriedLogsMount);
 
 const PLAYER_WEAPON_MOUNT_BASE_X = 4;
 const PLAYER_WEAPON_MOUNT_BASE_Y = 0;
@@ -361,6 +464,296 @@ const PLAYER_WEAPON_RECOIL_MAX = 1.2;
 const PLAYER_WEAPON_RECOIL_RECOVERY = 14;
 let playerWeaponRecoil = 0;
 const playerMuzzleFlashWorldPos = new THREE.Vector3();
+const turretMuzzleWorldPos = new THREE.Vector3();
+const MAX_CARRIED_LOGS = 20;
+const HARVEST_TREE_MAX_GROWTH_STAGE = 5;
+const HARVEST_TREE_COUNT = 0;
+const HARVEST_TREE_INTERACT_RANGE = 22;
+const HARVEST_TREE_AXE_RANGE = 28;
+const HARVEST_TREE_MIN_ACTIVE = 10;
+const HARVEST_EXTRA_TREES_PER_DAY = 2;
+const HARVEST_LOG_PICKUP_RANGE = 11;
+const HARVEST_LOG_DESPAWN_CYCLES = 4;
+const HARVEST_STONE_MAX_GROWTH_STAGE = 5;
+const HARVEST_STONE_AXE_RANGE = 28;
+const HARVEST_STONE_MIN_ACTIVE = 8;
+const HARVEST_EXTRA_STONES_PER_DAY = 2;
+const BREACH_WOOD_REPAIR_COST = 150;
+const BREACH_BUNKER_MAX_HP = 500;
+
+const playerAxeState = {
+  equipped: false,
+  swingTimer: 0,
+  swingDuration: 0.22,
+  autoChopCooldown: 0,
+  autoMineCooldown: 0,
+  fullAlertCooldown: 0,
+};
+
+const ULT_BUNKER_POSITION = { x: 0, z: 0 };
+const ULT_BUNKER_HOUSE_RADIUS = 16;
+const ULT_BUNKER_HOUSE_HEIGHT = 18;
+const ULT_BUNKER_COLLISION_RADIUS = 15;
+const ULT_BUNKER_ENTRY_POINT = { x: 0, z: ULT_BUNKER_HOUSE_RADIUS + 2.8 };
+const ULT_BUNKER_DEPTH_Y = -9.5;
+const ULT_BUNKER_MOVE_TO_HATCH_DURATION = 0.38;
+const ULT_BUNKER_DESCEND_DURATION = 0.88;
+const ULT_BUNKER_ARMING_DURATION = 0.45;
+const ULT_BUNKER_ASCEND_DURATION = 0.82;
+const ULT_BUNKER_RETURN_DURATION = 0.42;
+const ULT_BUNKER_CLOSE_DURATION = 0.34;
+
+const ultimateBunkerSequence = {
+  active: false,
+  phase: "idle",
+  phaseTime: 0,
+  startX: 0,
+  startZ: 0,
+  startYaw: 0,
+  blastX: 0,
+  blastZ: 0,
+  hasDetonated: false,
+};
+
+function createUltimateBunkerHatch() {
+  const group = new THREE.Group();
+  group.position.set(ULT_BUNKER_POSITION.x, 0, ULT_BUNKER_POSITION.z);
+
+  const shell = new THREE.Mesh(
+    new THREE.CylinderGeometry(ULT_BUNKER_HOUSE_RADIUS, ULT_BUNKER_HOUSE_RADIUS, ULT_BUNKER_HOUSE_HEIGHT, 40),
+    new THREE.MeshStandardMaterial({ color: 0x5a6069, roughness: 0.78, metalness: 0.38 })
+  );
+  shell.position.y = ULT_BUNKER_HOUSE_HEIGHT * 0.5;
+  shell.castShadow = true;
+  shell.receiveShadow = true;
+  group.add(shell);
+
+  const roof = new THREE.Mesh(
+    new THREE.CylinderGeometry(ULT_BUNKER_HOUSE_RADIUS + 0.8, ULT_BUNKER_HOUSE_RADIUS + 0.8, 0.72, 40),
+    new THREE.MeshStandardMaterial({ color: 0x6a727d, roughness: 0.58, metalness: 0.52 })
+  );
+  roof.position.y = ULT_BUNKER_HOUSE_HEIGHT + 0.36;
+  roof.castShadow = true;
+  roof.receiveShadow = true;
+  group.add(roof);
+
+  const trim = new THREE.Mesh(
+    new THREE.TorusGeometry(ULT_BUNKER_HOUSE_RADIUS + 0.2, 0.4, 12, 48),
+    new THREE.MeshStandardMaterial({ color: 0x8f98a3, roughness: 0.45, metalness: 0.56 })
+  );
+  trim.rotation.x = Math.PI / 2;
+  trim.position.y = ULT_BUNKER_HOUSE_HEIGHT + 0.54;
+  trim.castShadow = true;
+  group.add(trim);
+
+  const doorFrame = new THREE.Mesh(
+    new THREE.BoxGeometry(10, 16.4, 1.1),
+    new THREE.MeshStandardMaterial({ color: 0x3b424b, roughness: 0.7, metalness: 0.36 })
+  );
+  doorFrame.position.set(0, 8.2, ULT_BUNKER_HOUSE_RADIUS - 0.38);
+  doorFrame.castShadow = true;
+  doorFrame.receiveShadow = true;
+  group.add(doorFrame);
+
+  const doorPivot = new THREE.Group();
+  doorPivot.position.set(-3.9, 8.2, ULT_BUNKER_HOUSE_RADIUS + 0.14);
+  group.add(doorPivot);
+
+  const doorPanel = new THREE.Mesh(
+    new THREE.BoxGeometry(7.8, 15, 0.8),
+    new THREE.MeshStandardMaterial({ color: 0x7f8894, roughness: 0.52, metalness: 0.54 })
+  );
+  doorPanel.position.set(3.9, 0, 0);
+  doorPanel.castShadow = true;
+  doorPanel.receiveShadow = true;
+  doorPivot.add(doorPanel);
+
+  const wheelHub = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.38, 0.38, 0.34, 16),
+    new THREE.MeshStandardMaterial({ color: 0xa6b0bc, roughness: 0.35, metalness: 0.72 })
+  );
+  wheelHub.rotation.x = Math.PI / 2;
+  wheelHub.position.set(4.1, 0.6, 0.55);
+  doorPivot.add(wheelHub);
+
+  const wheelGroup = new THREE.Group();
+  wheelGroup.position.set(4.1, 0.6, 0.78);
+  doorPivot.add(wheelGroup);
+
+  const wheelRing = new THREE.Mesh(
+    new THREE.TorusGeometry(0.92, 0.11, 10, 24),
+    new THREE.MeshStandardMaterial({ color: 0xabb5c1, roughness: 0.34, metalness: 0.75 })
+  );
+  wheelGroup.add(wheelRing);
+
+  const spokeMaterial = new THREE.MeshStandardMaterial({ color: 0xc0c8d2, roughness: 0.36, metalness: 0.72 });
+  for (let index = 0; index < 6; index += 1) {
+    const spoke = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.07, 1.62, 10), spokeMaterial);
+    spoke.rotation.z = Math.PI * 0.5;
+    spoke.rotation.y = (Math.PI * 2 * index) / 6;
+    wheelGroup.add(spoke);
+  }
+
+  const hatchGlow = new THREE.Mesh(
+    new THREE.CircleGeometry(2, 24),
+    new THREE.MeshBasicMaterial({ color: 0xb9e6ff, transparent: true, opacity: 0.12, depthWrite: false })
+  );
+  hatchGlow.position.set(0, 10.6, ULT_BUNKER_HOUSE_RADIUS - 0.28);
+  group.add(hatchGlow);
+
+  return {
+    group,
+    doorPivot,
+    wheelGroup,
+    hatchGlow,
+  };
+}
+
+const ultimateBunkerHatch = createUltimateBunkerHatch();
+scene.add(ultimateBunkerHatch.group);
+
+const breachSirenLight = new THREE.PointLight(0xff3344, 0, 120, 2);
+breachSirenLight.position.set(ULT_BUNKER_POSITION.x, ULT_BUNKER_HOUSE_HEIGHT + 9, ULT_BUNKER_POSITION.z);
+scene.add(breachSirenLight);
+let breachAlertSprite = null;
+
+function setUltimateBunkerHatchOpen(openAmount) {
+  const open = THREE.MathUtils.clamp(openAmount, 0, 1);
+  ultimateBunkerHatch.doorPivot.rotation.y = -open * 1.05;
+  ultimateBunkerHatch.wheelGroup.rotation.z = open * Math.PI * 2.6;
+  ultimateBunkerHatch.hatchGlow.material.opacity = 0.12 + open * 0.24;
+}
+
+function easeInOut(t) {
+  const clamped = THREE.MathUtils.clamp(t, 0, 1);
+  return clamped * clamped * (3 - 2 * clamped);
+}
+
+function applyUltimateDamageAt(x, z) {
+  spawnUltimateWave(x, z, worldState.ultimate.radius);
+  for (let index = enemies.length - 1; index >= 0; index -= 1) {
+    const enemy = enemies[index];
+    const dx = enemy.x - x;
+    const dz = enemy.z - z;
+    if (Math.hypot(dx, dz) <= worldState.ultimate.radius + getEnemyHitRadius(enemy)) {
+      enemy.hp -= worldState.ultimate.damage;
+      if (enemy.hp <= 0) {
+        removeEnemy(enemy);
+      }
+    }
+  }
+}
+
+function resetUltimateBunkerSequence() {
+  ultimateBunkerSequence.active = false;
+  ultimateBunkerSequence.phase = "idle";
+  ultimateBunkerSequence.phaseTime = 0;
+  ultimateBunkerSequence.hasDetonated = false;
+  setUltimateBunkerHatchOpen(0);
+}
+
+function updateUltimateBunkerSequence(dt) {
+  if (!ultimateBunkerSequence.active) {
+    return;
+  }
+
+  const seq = ultimateBunkerSequence;
+  seq.phaseTime += dt;
+
+  if (seq.phase === "moveToHatch") {
+    const t = easeInOut(seq.phaseTime / ULT_BUNKER_MOVE_TO_HATCH_DURATION);
+    player.x = THREE.MathUtils.lerp(seq.startX, ULT_BUNKER_ENTRY_POINT.x, t);
+    player.z = THREE.MathUtils.lerp(seq.startZ, ULT_BUNKER_ENTRY_POINT.z, t);
+    playerMesh.position.set(player.x, PLAYER_VISUAL_Y, player.z);
+    setUltimateBunkerHatchOpen(t);
+
+    const moveDirX = ULT_BUNKER_POSITION.x - ULT_BUNKER_ENTRY_POINT.x;
+    const moveDirZ = ULT_BUNKER_POSITION.z - ULT_BUNKER_ENTRY_POINT.z;
+    if (Math.hypot(moveDirX, moveDirZ) > 0.01) {
+      player.facingYaw = Math.atan2(moveDirX, moveDirZ);
+      player.desiredFacingYaw = player.facingYaw;
+      playerMesh.rotation.y = player.facingYaw + PLAYER_FACING_OFFSET;
+    }
+
+    if (seq.phaseTime >= ULT_BUNKER_MOVE_TO_HATCH_DURATION) {
+      seq.phase = "descend";
+      seq.phaseTime = 0;
+    }
+    return;
+  }
+
+  if (seq.phase === "descend") {
+    const t = easeInOut(seq.phaseTime / ULT_BUNKER_DESCEND_DURATION);
+    const y = THREE.MathUtils.lerp(PLAYER_VISUAL_Y, ULT_BUNKER_DEPTH_Y, t);
+    player.x = ULT_BUNKER_ENTRY_POINT.x;
+    player.z = ULT_BUNKER_ENTRY_POINT.z;
+    playerMesh.position.set(player.x, y, player.z);
+    setUltimateBunkerHatchOpen(1);
+
+    if (seq.phaseTime >= ULT_BUNKER_DESCEND_DURATION) {
+      seq.phase = "arming";
+      seq.phaseTime = 0;
+    }
+    return;
+  }
+
+  if (seq.phase === "arming") {
+    playerMesh.position.set(ULT_BUNKER_ENTRY_POINT.x, ULT_BUNKER_DEPTH_Y, ULT_BUNKER_ENTRY_POINT.z);
+    setUltimateBunkerHatchOpen(1);
+
+    if (!seq.hasDetonated && seq.phaseTime >= ULT_BUNKER_ARMING_DURATION * 0.55) {
+      seq.hasDetonated = true;
+      applyUltimateDamageAt(seq.blastX, seq.blastZ);
+    }
+
+    if (seq.phaseTime >= ULT_BUNKER_ARMING_DURATION) {
+      seq.phase = "ascend";
+      seq.phaseTime = 0;
+    }
+    return;
+  }
+
+  if (seq.phase === "ascend") {
+    const t = easeInOut(seq.phaseTime / ULT_BUNKER_ASCEND_DURATION);
+    const y = THREE.MathUtils.lerp(ULT_BUNKER_DEPTH_Y, PLAYER_VISUAL_Y, t);
+    player.x = ULT_BUNKER_ENTRY_POINT.x;
+    player.z = ULT_BUNKER_ENTRY_POINT.z;
+    playerMesh.position.set(player.x, y, player.z);
+    setUltimateBunkerHatchOpen(1);
+
+    if (seq.phaseTime >= ULT_BUNKER_ASCEND_DURATION) {
+      seq.phase = "returnFromHatch";
+      seq.phaseTime = 0;
+    }
+    return;
+  }
+
+  if (seq.phase === "returnFromHatch") {
+    const t = easeInOut(seq.phaseTime / ULT_BUNKER_RETURN_DURATION);
+    player.x = THREE.MathUtils.lerp(ULT_BUNKER_ENTRY_POINT.x, seq.startX, t);
+    player.z = THREE.MathUtils.lerp(ULT_BUNKER_ENTRY_POINT.z, seq.startZ, t);
+    playerMesh.position.set(player.x, PLAYER_VISUAL_Y, player.z);
+    setUltimateBunkerHatchOpen(1 - t * 0.8);
+
+    if (seq.phaseTime >= ULT_BUNKER_RETURN_DURATION) {
+      seq.phase = "closeHatch";
+      seq.phaseTime = 0;
+      player.facingYaw = seq.startYaw;
+      player.desiredFacingYaw = seq.startYaw;
+      playerMesh.rotation.y = player.facingYaw + PLAYER_FACING_OFFSET;
+    }
+    return;
+  }
+
+  if (seq.phase === "closeHatch") {
+    const t = easeInOut(seq.phaseTime / ULT_BUNKER_CLOSE_DURATION);
+    setUltimateBunkerHatchOpen(0.2 * (1 - t));
+
+    if (seq.phaseTime >= ULT_BUNKER_CLOSE_DURATION) {
+      resetUltimateBunkerSequence();
+    }
+  }
+}
 
 const turretSlots = [
   { x: 0, z: -68, label: "Top" },
@@ -735,11 +1128,12 @@ function createLevel6TurretMesh() {
 
 const turrets = turretSlots.map((slot) => {
   const isMiddleSlot = slot.label === "Middle";
-  const turretBaseY = isMiddleSlot ? 2.2 : 1.2;
-  const turretLevelY = isMiddleSlot ? 4.4 : 3.4;
+  const turretBaseY = isMiddleSlot ? ULT_BUNKER_HOUSE_HEIGHT + 1.45 : 1.8;
+  const turretLevelY = isMiddleSlot ? ULT_BUNKER_HOUSE_HEIGHT + 3.65 : 4.0;
+  const turretBaseRadius = isMiddleSlot ? ULT_BUNKER_HOUSE_RADIUS : 14.8;
 
   const mesh = new THREE.Mesh(
-    new THREE.CylinderGeometry(14.8, 16.2, 2.4, 24),
+    new THREE.CylinderGeometry(turretBaseRadius, turretBaseRadius, 2.4, 24),
     new THREE.MeshStandardMaterial({ color: 0x8d97a6, roughness: 0.44, metalness: 0.62 })
   );
   mesh.position.set(slot.x, turretBaseY, slot.z);
@@ -860,13 +1254,19 @@ const muzzleFlashes = [];
 const creepDustPuffs = [];
 const ejectedReloadProps = [];
 const ejectedShellCasings = [];
+const harvestTrees = [];
+const harvestStones = [];
+const woodSuckEffects = [];
+const axeSwooshes = [];
+const droppedHarvestLogs = [];
+const treeLeafParticles = [];
 
 const ZOMBIE_SPLATTER_FADE_DURATION = 8;
 const PLAYER_MUZZLE_FLASH_LIFE = 0.08;
 const TURRET_MUZZLE_FLASH_LIFE = 0.06;
 const EJECTED_PROP_GROUND_HOLD = 8;
 const EJECTED_PROP_FADE_DURATION = 8;
-const HQ_SHELL_LANDING_Y = 1.62;
+const HQ_SHELL_LANDING_Y = 0.16;
 
 const enemyGeometry = new THREE.SphereGeometry(6.5, 12, 12);
 const enemyMaterial = new THREE.MeshStandardMaterial({ color: 0x84dd68, roughness: 0.75 });
@@ -884,6 +1284,23 @@ const creepDustMaterial = new THREE.MeshBasicMaterial({
   transparent: true,
   opacity: 0.44,
   depthWrite: false,
+});
+const harvestDroppedLogMaterial = new THREE.MeshStandardMaterial({ color: 0x8a6a46, roughness: 0.82, metalness: 0.06 });
+const treeLeafGeometry = new THREE.PlaneGeometry(0.92, 1.12);
+const treeLeafMaterial = new THREE.MeshBasicMaterial({
+  color: 0x66c36f,
+  transparent: true,
+  opacity: 0.95,
+  depthWrite: false,
+  side: THREE.DoubleSide,
+});
+const axeSwooshBaseMaterial = new THREE.MeshBasicMaterial({
+  color: 0xe6f3ff,
+  transparent: true,
+  opacity: 0.82,
+  depthWrite: false,
+  side: THREE.DoubleSide,
+  blending: THREE.AdditiveBlending,
 });
 const ENEMY_SHAMBLE_SWAY = 0.22;
 const ENEMY_SHAMBLE_YAW_SWAY = 0.055;
@@ -924,8 +1341,12 @@ const repairs = [
   { id: "repair250", name: "Repair +250 HP", hp: 250, cost: 250 },
   { id: "repair500", name: "Repair +500 HP", hp: 500, cost: 500 },
   { id: "repair1000", name: "Repair +1000 HP", hp: 1000, cost: 1000 },
+  { id: "repairBreach", name: "Repair Breach", cost: BREACH_WOOD_REPAIR_COST, resource: "wood", target: "breach" },
+  { id: "repairBunker", name: "Repair Bunker +250", hp: 250, cost: 400, target: "bunker" },
 ];
-const baseUpgradeCosts = [700, 1400];
+const baseUpgradeCosts = [700, 1400, 2200];
+const baseUpgradeWoodCosts = [120, 220, 0];
+const baseUpgradeStoneCosts = [0, 0, 160];
 const turretBuyCost = 550;
 const turretUpgradeCosts = [500, 900, 1400, 2200, 3200];
 const turretRangeByLevel = { 1: 170, 2: 220, 3: 250, 4: 340, 5: 360, 6: 390 };
@@ -1034,9 +1455,12 @@ let baseFencePerimeterLoadStarted = false;
 let baseFenceMainGroup = null;
 let baseFenceInnerGroup = null;
 let baseBrickWallGroup = null;
+let baseFenceSegmentCount = 0;
 let fieldScatterPropsBuilt = false;
 let fieldScatterPropsLoadStarted = false;
 let fieldScatterPropsGroup = null;
+let harvestTreePrototypePool = [];
+let harvestStonePrototypePool = [];
 let clipLargePrototype = null;
 let clipSmallPrototype = null;
 let bulletFoamThickPrototype = null;
@@ -1795,13 +2219,21 @@ function loadBaseFencePerimeter() {
         prototype.position.set(-centerX, -centeredBox.min.y, -centerZ);
 
         const group = new THREE.Group();
+        const segmentMeshes = [];
         for (let index = 0; index < segmentCount; index += 1) {
           const angle = (index / segmentCount) * Math.PI * 2;
           const segment = prototype.clone(true);
           segment.position.set(Math.cos(angle) * radius, heightY, Math.sin(angle) * radius);
           segment.rotation.y = -angle + Math.PI * 0.5 + yawOffset + Math.PI;
+          segment.userData.segmentIndex = index;
+          segment.userData.baseRotationY = segment.rotation.y;
           group.add(segment);
+          segmentMeshes.push(segment);
         }
+        group.userData.segmentMeshes = segmentMeshes;
+        group.userData.segmentCount = segmentCount;
+        group.userData.radius = radius;
+        group.userData.heightY = heightY;
         return group;
       };
 
@@ -1834,6 +2266,8 @@ function loadBaseFencePerimeter() {
             scene.add(baseFenceMainGroup);
             scene.add(baseFenceInnerGroup);
             scene.add(baseBrickWallGroup);
+
+            baseFenceSegmentCount = ringBuildOptions.segmentCount;
 
             applyBaseUpgradeVisuals();
             baseFencePerimeterBuilt = true;
@@ -1881,6 +2315,8 @@ function loadFieldScatterProps() {
           rocksPrototype,
           debrisPrototype,
         ]) => {
+          harvestTreePrototypePool = [pineCrookedPrototype, pinePrototype];
+          harvestStonePrototypePool = [rocksTallPrototype, rocksPrototype];
           const prototypePool = [
             pineCrookedPrototype,
             pineCrookedPrototype,
@@ -1916,6 +2352,7 @@ function loadFieldScatterProps() {
 
             const prototype = prototypePool[Math.floor(Math.random() * prototypePool.length)];
             const isTreePrototype = prototype === pineCrookedPrototype || prototype === pinePrototype;
+            const isStonePrototype = prototype === rocksTallPrototype || prototype === rocksPrototype;
             const baseScale = THREE.MathUtils.randFloat(7.6, 9.6);
             const treeAgeScale = THREE.MathUtils.randFloat(1.5, 2.0);
             placements.push({
@@ -1923,7 +2360,7 @@ function loadFieldScatterProps() {
               x,
               z,
               y: 0,
-              scale: isTreePrototype ? baseScale * treeAgeScale : baseScale,
+              scale: isTreePrototype ? baseScale * treeAgeScale : isStonePrototype ? baseScale * 1.5 : baseScale,
               rotY: Math.random() * Math.PI * 2,
             });
           }
@@ -1934,6 +2371,12 @@ function loadFieldScatterProps() {
             model.position.set(placement.x, placement.y, placement.z);
             model.rotation.y = placement.rotY;
             model.scale.setScalar(placement.scale);
+            const isTreePrototype =
+              placement.prototype === pineCrookedPrototype ||
+              placement.prototype === pinePrototype;
+            const isStonePrototype =
+              placement.prototype === rocksTallPrototype ||
+              placement.prototype === rocksPrototype;
             model.traverse((node) => {
               if (!node.isMesh) {
                 return;
@@ -1941,7 +2384,26 @@ function loadFieldScatterProps() {
               node.castShadow = true;
               node.receiveShadow = true;
             });
+            if (isTreePrototype) {
+              model.userData.harvestTreeEligible = true;
+              model.userData.harvestBaseScale = placement.scale;
+              model.userData.harvestPrototype = placement.prototype;
+            }
+            if (isStonePrototype) {
+              model.userData.harvestStoneEligible = true;
+              model.userData.harvestBaseScale = placement.scale;
+              model.userData.harvestPrototype = placement.prototype;
+            }
             propsGroup.add(model);
+
+            if (isTreePrototype) {
+              const woodYield = placement.scale >= 15 ? 2 : 1;
+              registerHarvestTreeModel(model, placement.prototype, placement.scale, woodYield, HARVEST_TREE_MAX_GROWTH_STAGE);
+            }
+            if (isStonePrototype) {
+              const stoneYield = placement.scale >= 13 ? 2 : 1;
+              registerHarvestStoneModel(model, placement.prototype, placement.scale, stoneYield, HARVEST_STONE_MAX_GROWTH_STAGE);
+            }
           });
 
           scene.add(propsGroup);
@@ -1957,6 +2419,935 @@ function loadFieldScatterProps() {
     });
 }
 
+function updateCarriedLogsVisual() {
+  carriedLogsMount.children.splice(0).forEach((mesh) => {
+    mesh.geometry?.dispose?.();
+    mesh.material?.dispose?.();
+    carriedLogsMount.remove(mesh);
+  });
+
+  for (let index = 0; index < worldState.carriedLogs; index += 1) {
+    const log = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.96, 1.26, 10.5, 10),
+      new THREE.MeshStandardMaterial({ color: 0x8a6a46, roughness: 0.82, metalness: 0.06 })
+    );
+    log.rotation.z = Math.PI * 0.5;
+    log.position.set(0, index * 1.6, 0);
+    log.castShadow = true;
+    carriedLogsMount.add(log);
+  }
+}
+
+function setAxeEquipped(equipped) {
+  playerAxeState.equipped = equipped;
+  playerAxeMount.visible = equipped;
+  playerWeaponMount.visible = !equipped;
+}
+
+function getHarvestGrowthScale(growthStage) {
+  const normalized = THREE.MathUtils.clamp(growthStage / HARVEST_TREE_MAX_GROWTH_STAGE, 0, 1);
+  return 0.2 + normalized * 0.8;
+}
+
+function registerHarvestTreeModel(model, sourcePrototype, baseScale, woodYield, growthStage = HARVEST_TREE_MAX_GROWTH_STAGE) {
+  const tree = {
+    model,
+    sourcePrototype,
+    baseScale,
+    woodYield,
+    growthStage,
+    hitCount: 0,
+    shakeTimer: 0,
+    shakePhase: Math.random() * Math.PI * 2,
+    falling: false,
+    fallProgress: 0,
+    fallDirX: 0,
+    fallDirZ: 0,
+    fallDropPickupCycles: 0,
+  };
+  const growthScale = getHarvestGrowthScale(growthStage);
+  tree.model.scale.setScalar(baseScale * growthScale);
+  harvestTrees.push(tree);
+  return tree;
+}
+
+function findHarvestTreeSpawnPosition() {
+  const maxRadius = Math.min(worldSize.width, worldSize.depth) * 0.5 - 26;
+  const minRadius = Math.max(130, ULT_BUNKER_HOUSE_RADIUS + 36);
+  for (let attempt = 0; attempt < 180; attempt += 1) {
+    const angle = Math.random() * Math.PI * 2;
+    const radius = THREE.MathUtils.randFloat(minRadius, maxRadius);
+    const x = Math.cos(angle) * radius;
+    const z = Math.sin(angle) * radius;
+
+    let blocked = false;
+    for (const tree of harvestTrees) {
+      if (!tree.model?.parent) {
+        continue;
+      }
+      if (Math.hypot(tree.model.position.x - x, tree.model.position.z - z) < 34) {
+        blocked = true;
+        break;
+      }
+    }
+    if (!blocked) {
+      return { x, z };
+    }
+  }
+
+  const fallbackAngle = Math.random() * Math.PI * 2;
+  const fallbackRadius = Math.max(140, ULT_BUNKER_HOUSE_RADIUS + 48);
+  return {
+    x: Math.cos(fallbackAngle) * fallbackRadius,
+    z: Math.sin(fallbackAngle) * fallbackRadius,
+  };
+}
+
+function resetHarvestTrees(initialGrowthStage = HARVEST_TREE_MAX_GROWTH_STAGE) {
+  harvestTrees.length = 0;
+
+  if (fieldScatterPropsGroup) {
+    fieldScatterPropsGroup.children.forEach((model) => {
+      if (!model.userData?.harvestTreeEligible) {
+        return;
+      }
+      const sourcePrototype = model.userData.harvestPrototype || harvestTreePrototypePool[0] || null;
+      const baseScale = model.userData.harvestBaseScale || model.scale.x || 12;
+      const woodYield = baseScale >= 15 ? 2 : 1;
+      registerHarvestTreeModel(model, sourcePrototype, baseScale, woodYield, initialGrowthStage);
+    });
+    return;
+  }
+
+  for (let index = 0; index < HARVEST_TREE_COUNT; index += 1) {
+    if (harvestTreePrototypePool.length === 0) {
+      break;
+    }
+    const prototype = harvestTreePrototypePool[Math.floor(Math.random() * harvestTreePrototypePool.length)];
+    const pos = findHarvestTreeSpawnPosition();
+    const model = prototype.clone(true);
+    const baseScale = THREE.MathUtils.randFloat(12, 17.5);
+    model.position.set(pos.x, 0, pos.z);
+    model.rotation.y = Math.random() * Math.PI * 2;
+    model.traverse((node) => {
+      if (node.isMesh) {
+        node.castShadow = true;
+        node.receiveShadow = true;
+      }
+    });
+    scene.add(model);
+    registerHarvestTreeModel(model, prototype, baseScale, baseScale >= 15 ? 2 : 1, initialGrowthStage);
+  }
+}
+
+function registerHarvestStoneModel(model, sourcePrototype, baseScale, stoneYield, growthStage = HARVEST_STONE_MAX_GROWTH_STAGE) {
+  const stone = {
+    model,
+    sourcePrototype,
+    baseScale,
+    stoneYield,
+    growthStage,
+    hitCount: 0,
+    shakeTimer: 0,
+    shakePhase: Math.random() * Math.PI * 2,
+    falling: false,
+    fallProgress: 0,
+  };
+  const growthScale = getHarvestGrowthScale(growthStage);
+  stone.model.scale.setScalar(baseScale * growthScale);
+  harvestStones.push(stone);
+  return stone;
+}
+
+function spawnHarvestStones(count, growthStage = HARVEST_STONE_MAX_GROWTH_STAGE) {
+  if (harvestStonePrototypePool.length === 0 || count <= 0) {
+    return;
+  }
+  for (let index = 0; index < count; index += 1) {
+    const prototype = harvestStonePrototypePool[Math.floor(Math.random() * harvestStonePrototypePool.length)];
+    const pos = findHarvestTreeSpawnPosition();
+    const model = prototype.clone(true);
+    const baseScale = THREE.MathUtils.randFloat(10.5, 15.5);
+    model.position.set(pos.x, 0, pos.z);
+    model.rotation.y = Math.random() * Math.PI * 2;
+    model.traverse((node) => {
+      if (node.isMesh) {
+        node.castShadow = true;
+        node.receiveShadow = true;
+      }
+    });
+    scene.add(model);
+    registerHarvestStoneModel(model, prototype, baseScale, baseScale >= 13 ? 2 : 1, growthStage);
+  }
+}
+
+function resetHarvestStones(initialGrowthStage = HARVEST_STONE_MAX_GROWTH_STAGE) {
+  harvestStones.length = 0;
+
+  if (fieldScatterPropsGroup) {
+    fieldScatterPropsGroup.children.forEach((model) => {
+      if (!model.userData?.harvestStoneEligible) {
+        return;
+      }
+      const sourcePrototype = model.userData.harvestPrototype || harvestStonePrototypePool[0] || null;
+      const baseScale = model.userData.harvestBaseScale || model.scale.x || 12;
+      const stoneYield = baseScale >= 13 ? 2 : 1;
+      registerHarvestStoneModel(model, sourcePrototype, baseScale, stoneYield, initialGrowthStage);
+    });
+    return;
+  }
+
+  spawnHarvestStones(HARVEST_STONE_MIN_ACTIVE, initialGrowthStage);
+}
+
+function getNearestHarvestStone(maxDistance, requireMature = true) {
+  let best = null;
+  let bestDist = maxDistance;
+  for (const stone of harvestStones) {
+    if (stone.falling || !stone.model?.parent) {
+      continue;
+    }
+    if (requireMature && stone.growthStage < HARVEST_STONE_MAX_GROWTH_STAGE) {
+      continue;
+    }
+    const dist = Math.hypot(stone.model.position.x - player.x, stone.model.position.z - player.z);
+    if (dist <= bestDist) {
+      best = stone;
+      bestDist = dist;
+    }
+  }
+  return best;
+}
+
+function finalizeHarvestedStone(stone) {
+  worldState.stoneStock += Math.max(1, stone.stoneYield || 1);
+  spawnCannonBlastEffect(stone.model.position.x, stone.model.position.z, 9);
+
+  stone.model?.parent?.remove(stone.model);
+  stone.model?.traverse((node) => {
+    if (!node.isMesh) {
+      return;
+    }
+    node.geometry?.dispose?.();
+    if (Array.isArray(node.material)) {
+      node.material.forEach((material) => material?.dispose?.());
+    } else {
+      node.material?.dispose?.();
+    }
+  });
+
+  harvestStones.splice(harvestStones.indexOf(stone), 1);
+
+  if (harvestStonePrototypePool.length > 0) {
+    const prototype = stone.sourcePrototype || harvestStonePrototypePool[Math.floor(Math.random() * harvestStonePrototypePool.length)];
+    const sproutPos = findHarvestTreeSpawnPosition();
+    const sprout = prototype.clone(true);
+    sprout.position.set(sproutPos.x, 0, sproutPos.z);
+    sprout.rotation.y = Math.random() * Math.PI * 2;
+    sprout.traverse((node) => {
+      if (node.isMesh) {
+        node.castShadow = true;
+        node.receiveShadow = true;
+      }
+    });
+    scene.add(sprout);
+    registerHarvestStoneModel(sprout, prototype, stone.baseScale, stone.stoneYield || 1, 0);
+  }
+}
+
+function performStoneMine(stone) {
+  if (worldState.phase !== "day" || worldState.paused || worldState.gameOver || ultimateBunkerSequence.active) {
+    return;
+  }
+  if (!stone) {
+    return;
+  }
+
+  playerAxeState.swingTimer = playerAxeState.swingDuration;
+  spawnAxeSwoosh();
+
+  stone.hitCount += 1;
+  if (stone.hitCount === 1) {
+    stone.shakeTimer = 0.2;
+    spawnCannonBlastEffect(stone.model.position.x, stone.model.position.z, 4.5);
+    return;
+  }
+
+  if (!stone.falling) {
+    stone.falling = true;
+    stone.fallProgress = 0;
+  }
+}
+
+function spawnHarvestTrees(count, growthStage = HARVEST_TREE_MAX_GROWTH_STAGE) {
+  if (harvestTreePrototypePool.length === 0 || count <= 0) {
+    return;
+  }
+  for (let index = 0; index < count; index += 1) {
+    const prototype = harvestTreePrototypePool[Math.floor(Math.random() * harvestTreePrototypePool.length)];
+    const pos = findHarvestTreeSpawnPosition();
+    const model = prototype.clone(true);
+    const baseScale = THREE.MathUtils.randFloat(12, 17.5);
+    model.position.set(pos.x, 0, pos.z);
+    model.rotation.y = Math.random() * Math.PI * 2;
+    model.traverse((node) => {
+      if (node.isMesh) {
+        node.castShadow = true;
+        node.receiveShadow = true;
+      }
+    });
+    scene.add(model);
+    registerHarvestTreeModel(model, prototype, baseScale, baseScale >= 15 ? 2 : 1, growthStage);
+  }
+}
+
+function getNearestHarvestTree(maxDistance, requireMature = true) {
+  let best = null;
+  let bestDist = maxDistance;
+  for (const tree of harvestTrees) {
+    if (tree.falling) {
+      continue;
+    }
+    if (!tree.model?.parent) {
+      continue;
+    }
+    if (requireMature && tree.growthStage < HARVEST_TREE_MAX_GROWTH_STAGE) {
+      continue;
+    }
+    const dist = Math.hypot(tree.model.position.x - player.x, tree.model.position.z - player.z);
+    if (dist <= bestDist) {
+      best = tree;
+      bestDist = dist;
+    }
+  }
+  return best;
+}
+
+function getHarvestTreeNearPoint(x, z, maxDistance, requireMature = false) {
+  let nearest = null;
+  let nearestDist = maxDistance;
+  for (const tree of harvestTrees) {
+    if (!tree.model?.parent || tree.falling) {
+      continue;
+    }
+    if (requireMature && tree.growthStage < HARVEST_TREE_MAX_GROWTH_STAGE) {
+      continue;
+    }
+    const distance = Math.hypot(tree.model.position.x - x, tree.model.position.z - z);
+    if (distance <= nearestDist) {
+      nearest = tree;
+      nearestDist = distance;
+    }
+  }
+  return nearest;
+}
+
+function spawnTreeLeafBurst(tree, count = 16, burstStrength = 1) {
+  const treeX = tree.model?.position?.x ?? 0;
+  const treeZ = tree.model?.position?.z ?? 0;
+  const crownY = Math.max(5.2, (tree.model?.scale?.y ?? tree.baseScale ?? 12) * 0.7);
+  for (let index = 0; index < count; index += 1) {
+    const mesh = new THREE.Mesh(treeLeafGeometry.clone(), treeLeafMaterial.clone());
+    mesh.position.set(
+      treeX + THREE.MathUtils.randFloatSpread(2.2),
+      crownY + THREE.MathUtils.randFloatSpread(2.3),
+      treeZ + THREE.MathUtils.randFloatSpread(2.2)
+    );
+    mesh.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, Math.random() * Math.PI);
+    mesh.scale.setScalar(0.8 + Math.random() * 1.4);
+    mesh.material.color.setHSL(0.22 + Math.random() * 0.16, 0.65, 0.42 + Math.random() * 0.2);
+    scene.add(mesh);
+
+    const angle = Math.random() * Math.PI * 2;
+    const speed = (4.8 + Math.random() * 9.5) * burstStrength;
+    treeLeafParticles.push({
+      mesh,
+      vx: Math.cos(angle) * speed,
+      vz: Math.sin(angle) * speed,
+      vy: (8.5 + Math.random() * 8.5) * burstStrength,
+      rvx: THREE.MathUtils.randFloatSpread(7),
+      rvy: THREE.MathUtils.randFloatSpread(10),
+      rvz: THREE.MathUtils.randFloatSpread(7),
+      life: 0.9 + Math.random() * 0.45,
+      maxLife: 0.9 + Math.random() * 0.45,
+    });
+  }
+}
+
+function spawnTreeFallSmoke(tree, smokePuffs = 34, scaleMultiplier = 4.8) {
+  const treeX = tree.model?.position?.x ?? 0;
+  const treeZ = tree.model?.position?.z ?? 0;
+  for (let index = 0; index < smokePuffs; index += 1) {
+    const angle = (Math.PI * 2 * index) / smokePuffs + (Math.random() - 0.5) * 0.45;
+    const dirX = Math.cos(angle);
+    const dirZ = Math.sin(angle);
+    const radialJitter = 0.6 + Math.random() * 1.8;
+    spawnCreepDust(
+      { x: treeX + dirX * radialJitter, z: treeZ + dirZ * radialJitter },
+      dirX,
+      dirZ,
+      scaleMultiplier * (1 + Math.random() * 0.75),
+      1.9,
+      1.35
+    );
+  }
+}
+
+function spawnDroppedHarvestLogPickup(tree, despawnCycles = HARVEST_LOG_DESPAWN_CYCLES) {
+  const treeX = tree.model?.position?.x ?? 0;
+  const treeZ = tree.model?.position?.z ?? 0;
+  const pickupMesh = new THREE.Mesh(new THREE.CylinderGeometry(1.25, 1.45, 11.5, 12), harvestDroppedLogMaterial.clone());
+  pickupMesh.rotation.z = Math.PI * 0.5;
+  pickupMesh.rotation.y = Math.random() * Math.PI * 2;
+  pickupMesh.position.set(treeX, 1.25, treeZ);
+  pickupMesh.castShadow = true;
+  pickupMesh.receiveShadow = true;
+  scene.add(pickupMesh);
+
+  droppedHarvestLogs.push({
+    mesh: pickupMesh,
+    woodAmount: Math.max(1, tree.woodYield || 1),
+    spawnCycle: worldState.growthCycleCount,
+    despawnCycles,
+    bobPhase: Math.random() * Math.PI * 2,
+    baseY: 1.25,
+  });
+}
+
+function finalizeHarvestedTree(tree, options = {}) {
+  const autoCollect = options.autoCollect !== false;
+  const dropPickupCycles = options.dropPickupCycles || 0;
+
+  if (autoCollect && worldState.carriedLogs < MAX_CARRIED_LOGS) {
+    const canAdd = Math.min(MAX_CARRIED_LOGS - worldState.carriedLogs, tree.woodYield || 1);
+    worldState.carriedLogs += canAdd;
+    updateCarriedLogsVisual();
+  } else if (!autoCollect && dropPickupCycles > 0) {
+    spawnDroppedHarvestLogPickup(tree, dropPickupCycles);
+  }
+
+  spawnTreeFallSmoke(tree, 52, 5.6);
+
+  tree.model?.parent?.remove(tree.model);
+  tree.model?.traverse((node) => {
+    if (!node.isMesh) {
+      return;
+    }
+    node.geometry?.dispose?.();
+    if (Array.isArray(node.material)) {
+      node.material.forEach((material) => material?.dispose?.());
+    } else {
+      node.material?.dispose?.();
+    }
+  });
+
+  harvestTrees.splice(harvestTrees.indexOf(tree), 1);
+
+  if (harvestTreePrototypePool.length > 0) {
+    const prototype = tree.sourcePrototype || harvestTreePrototypePool[Math.floor(Math.random() * harvestTreePrototypePool.length)];
+    const sproutPos = findHarvestTreeSpawnPosition();
+    const sprout = prototype.clone(true);
+    sprout.position.set(sproutPos.x, 0, sproutPos.z);
+    sprout.rotation.y = Math.random() * Math.PI * 2;
+    sprout.traverse((node) => {
+      if (node.isMesh) {
+        node.castShadow = true;
+        node.receiveShadow = true;
+      }
+    });
+    scene.add(sprout);
+    registerHarvestTreeModel(sprout, prototype, tree.baseScale, tree.woodYield || 1, 0);
+  } else {
+    const fallbackPos = findHarvestTreeSpawnPosition();
+    const placeholder = new THREE.Mesh(
+      new THREE.ConeGeometry(2.2, 4.5, 10),
+      new THREE.MeshStandardMaterial({ color: 0x4c7d45, roughness: 0.9, metalness: 0.02 })
+    );
+    placeholder.position.set(fallbackPos.x, 2.3, fallbackPos.z);
+    scene.add(placeholder);
+    registerHarvestTreeModel(placeholder, null, tree.baseScale || 12, tree.woodYield || 1, 0);
+  }
+}
+
+function performTreeChop(tree) {
+  if (worldState.phase !== "day" || worldState.paused || worldState.gameOver || ultimateBunkerSequence.active) {
+    return;
+  }
+  if (!tree) {
+    return;
+  }
+  if (worldState.carriedLogs >= MAX_CARRIED_LOGS) {
+    if (playerAxeState.fullAlertCooldown <= 0) {
+      showPlayerSpeechBubble("I'm full", 1.1);
+      playerAxeState.fullAlertCooldown = 1.1;
+    }
+    return;
+  }
+
+  playerAxeState.swingTimer = playerAxeState.swingDuration;
+  spawnAxeSwoosh();
+  spawnTreeLeafBurst(tree, 14, 1);
+
+  tree.hitCount += 1;
+  if (tree.hitCount === 1) {
+    tree.shakeTimer = 0.24;
+    return;
+  }
+
+  if (!tree.falling) {
+    tree.falling = true;
+    tree.fallProgress = 0;
+    spawnTreeLeafBurst(tree, 30, 1.35);
+    spawnTreeFallSmoke(tree, 28, 4.2);
+  }
+}
+
+function tryChopNearestTree() {
+  const tree = getNearestHarvestTree(HARVEST_TREE_INTERACT_RANGE, true);
+  performTreeChop(tree);
+}
+
+function tryDepositCarriedLogs() {
+  if (worldState.carriedLogs <= 0 || worldState.phase !== "day" || worldState.paused || worldState.gameOver) {
+    return;
+  }
+  const distToBunker = Math.hypot(player.x - ULT_BUNKER_POSITION.x, player.z - ULT_BUNKER_POSITION.z);
+  if (distToBunker > ULT_BUNKER_HOUSE_RADIUS + 18) {
+    return;
+  }
+
+  startAutoDepositLogs();
+}
+
+function showPlayerSpeechBubble(text, duration = 1.2) {
+  if (playerSpeechBubble.sprite) {
+    playerMesh.remove(playerSpeechBubble.sprite);
+    playerSpeechBubble.sprite.material.map?.dispose?.();
+    playerSpeechBubble.sprite.material.dispose?.();
+    playerSpeechBubble.sprite = null;
+  }
+  const sprite = createSpeechBubbleSprite(text);
+  sprite.position.set(0, 22, 0);
+  playerMesh.add(sprite);
+  playerSpeechBubble.sprite = sprite;
+  playerSpeechBubble.timer = duration;
+}
+
+function updatePlayerSpeechBubble(dt) {
+  if (!playerSpeechBubble.sprite) {
+    return;
+  }
+  playerSpeechBubble.timer = Math.max(0, playerSpeechBubble.timer - dt);
+  const alpha = Math.min(1, playerSpeechBubble.timer / 0.24);
+  playerSpeechBubble.sprite.material.opacity = alpha;
+  playerSpeechBubble.sprite.position.y = 22 + (1 - alpha) * 0.8;
+  if (playerSpeechBubble.timer <= 0) {
+    playerMesh.remove(playerSpeechBubble.sprite);
+    playerSpeechBubble.sprite.material.map?.dispose?.();
+    playerSpeechBubble.sprite.material.dispose?.();
+    playerSpeechBubble.sprite = null;
+  }
+}
+
+function startAutoDepositLogs() {
+  if (worldState.carriedLogs <= 0) {
+    return;
+  }
+
+  const logCount = worldState.carriedLogs;
+  for (let index = 0; index < logCount; index += 1) {
+    const life = 0.58 + Math.random() * 0.25;
+    const mesh = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.92, 1.2, 10.2, 10),
+      new THREE.MeshStandardMaterial({ color: 0x8a6a46, roughness: 0.82, metalness: 0.06, transparent: true, opacity: 0.96 })
+    );
+    mesh.rotation.z = Math.PI * 0.5;
+    mesh.position.set(
+      player.x + THREE.MathUtils.randFloatSpread(2.2),
+      PLAYER_VISUAL_Y + 3.2 + index * 0.4,
+      player.z + THREE.MathUtils.randFloatSpread(2.2)
+    );
+    mesh.castShadow = true;
+    scene.add(mesh);
+
+    woodSuckEffects.push({
+      mesh,
+      life,
+      maxLife: life,
+      targetX: ULT_BUNKER_ENTRY_POINT.x,
+      targetY: ULT_BUNKER_HOUSE_HEIGHT * 0.5 + 2.5,
+      targetZ: ULT_BUNKER_ENTRY_POINT.z,
+    });
+  }
+
+  worldState.woodStock += logCount;
+  worldState.carriedLogs = 0;
+  updateCarriedLogsVisual();
+}
+
+function updateWoodSuckEffects(dt) {
+  for (let index = woodSuckEffects.length - 1; index >= 0; index -= 1) {
+    const effect = woodSuckEffects[index];
+    effect.life -= dt;
+    const alpha = Math.max(0, effect.life / effect.maxLife);
+    effect.mesh.position.x += (effect.targetX - effect.mesh.position.x) * Math.min(1, dt * 7.5);
+    effect.mesh.position.y += (effect.targetY - effect.mesh.position.y) * Math.min(1, dt * 8.5);
+    effect.mesh.position.z += (effect.targetZ - effect.mesh.position.z) * Math.min(1, dt * 7.5);
+    effect.mesh.scale.setScalar(Math.max(0.12, alpha));
+    effect.mesh.material.opacity = alpha;
+
+    if (effect.life <= 0) {
+      scene.remove(effect.mesh);
+      effect.mesh.geometry.dispose();
+      effect.mesh.material.dispose();
+      woodSuckEffects.splice(index, 1);
+    }
+  }
+}
+
+function spawnAxeSwoosh() {
+  const mesh = new THREE.Mesh(
+    new THREE.TorusGeometry(5.8, 0.28, 8, 26, Math.PI * 0.86),
+    axeSwooshBaseMaterial.clone()
+  );
+  const yaw = player.facingYaw;
+  const offset = 4.8;
+  mesh.position.set(
+    player.x + Math.sin(yaw) * offset,
+    PLAYER_VISUAL_Y + 4.4,
+    player.z + Math.cos(yaw) * offset
+  );
+  mesh.rotation.set(0.15, yaw + Math.PI * 0.5, -1.04);
+  mesh.scale.setScalar(0.65);
+  scene.add(mesh);
+  axeSwooshes.push({
+    mesh,
+    life: 0.2,
+    maxLife: 0.2,
+    spinDir: Math.random() < 0.5 ? -1 : 1,
+  });
+}
+
+function updateAxeSwooshes(dt) {
+  for (let index = axeSwooshes.length - 1; index >= 0; index -= 1) {
+    const swoosh = axeSwooshes[index];
+    swoosh.life -= dt;
+    const alpha = Math.max(0, swoosh.life / swoosh.maxLife);
+    const growth = 1 + (1 - alpha) * 0.9;
+    swoosh.mesh.material.opacity = 0.82 * alpha;
+    swoosh.mesh.scale.setScalar(0.65 * growth);
+    swoosh.mesh.position.y += dt * 6.5;
+    swoosh.mesh.rotation.z += dt * 9 * swoosh.spinDir;
+
+    if (swoosh.life <= 0) {
+      scene.remove(swoosh.mesh);
+      swoosh.mesh.geometry.dispose();
+      swoosh.mesh.material.dispose();
+      axeSwooshes.splice(index, 1);
+    }
+  }
+}
+
+function knockdownHarvestTreeByCannon(tree, shotDirX = 0, shotDirZ = 0) {
+  if (!tree || tree.falling || !tree.model?.parent) {
+    return;
+  }
+
+  let fallDirX = -shotDirX;
+  let fallDirZ = -shotDirZ;
+  const shotLen = Math.hypot(fallDirX, fallDirZ);
+  if (shotLen > 0.0001) {
+    fallDirX /= shotLen;
+    fallDirZ /= shotLen;
+  } else {
+    const awayX = tree.model.position.x;
+    const awayZ = tree.model.position.z;
+    const awayLen = Math.hypot(awayX, awayZ) || 1;
+    fallDirX = awayX / awayLen;
+    fallDirZ = awayZ / awayLen;
+  }
+
+  tree.fallDirX = fallDirX;
+  tree.fallDirZ = fallDirZ;
+  tree.fallDropPickupCycles = HARVEST_LOG_DESPAWN_CYCLES;
+  tree.falling = true;
+  tree.fallProgress = 0;
+
+  spawnTreeLeafBurst(tree, 40, 1.9);
+  spawnTreeFallSmoke(tree, 24, 4.2);
+}
+
+function updateDroppedHarvestLogs(dt) {
+  for (let index = droppedHarvestLogs.length - 1; index >= 0; index -= 1) {
+    const pickup = droppedHarvestLogs[index];
+    if (worldState.growthCycleCount - pickup.spawnCycle >= pickup.despawnCycles) {
+      scene.remove(pickup.mesh);
+      pickup.mesh.geometry.dispose();
+      pickup.mesh.material.dispose();
+      droppedHarvestLogs.splice(index, 1);
+      continue;
+    }
+
+    pickup.bobPhase += dt * 3.2;
+    pickup.mesh.position.y = pickup.baseY + Math.sin(pickup.bobPhase) * 0.14;
+    pickup.mesh.rotation.x = Math.sin(pickup.bobPhase * 0.75) * 0.08;
+
+    if (worldState.phase !== "day") {
+      continue;
+    }
+
+    const distance = Math.hypot(pickup.mesh.position.x - player.x, pickup.mesh.position.z - player.z);
+    if (distance > HARVEST_LOG_PICKUP_RANGE || worldState.carriedLogs >= MAX_CARRIED_LOGS) {
+      continue;
+    }
+
+    const canTake = Math.min(MAX_CARRIED_LOGS - worldState.carriedLogs, pickup.woodAmount);
+    if (canTake <= 0) {
+      continue;
+    }
+
+    worldState.carriedLogs += canTake;
+    pickup.woodAmount -= canTake;
+    updateCarriedLogsVisual();
+
+    if (pickup.woodAmount <= 0) {
+      scene.remove(pickup.mesh);
+      pickup.mesh.geometry.dispose();
+      pickup.mesh.material.dispose();
+      droppedHarvestLogs.splice(index, 1);
+    }
+  }
+}
+
+function updateTreeLeafParticles(dt) {
+  for (let index = treeLeafParticles.length - 1; index >= 0; index -= 1) {
+    const particle = treeLeafParticles[index];
+    particle.life -= dt;
+    particle.vy -= 22 * dt;
+    particle.mesh.position.x += particle.vx * dt;
+    particle.mesh.position.y += particle.vy * dt;
+    particle.mesh.position.z += particle.vz * dt;
+    particle.mesh.rotation.x += particle.rvx * dt;
+    particle.mesh.rotation.y += particle.rvy * dt;
+    particle.mesh.rotation.z += particle.rvz * dt;
+    const alpha = Math.max(0, particle.life / particle.maxLife);
+    particle.mesh.material.opacity = alpha * 0.95;
+
+    if (particle.mesh.position.y <= 0.12 || particle.life <= 0) {
+      scene.remove(particle.mesh);
+      particle.mesh.geometry.dispose();
+      particle.mesh.material.dispose();
+      treeLeafParticles.splice(index, 1);
+    }
+  }
+}
+
+function updateCameraFollow(dt) {
+  if (cameraOrbit.isDragging) {
+    return;
+  }
+
+  const playerCenterDist = Math.hypot(player.x, player.z);
+  if (playerCenterDist <= CAMERA_HQ_STAY_RADIUS) {
+    cameraOrbit.targetX += (0 - cameraOrbit.targetX) * Math.min(1, dt * CAMERA_FOLLOW_LERP);
+    cameraOrbit.targetZ += (0 - cameraOrbit.targetZ) * Math.min(1, dt * CAMERA_FOLLOW_LERP);
+    applyCameraOrbit();
+    return;
+  }
+
+  const dx = player.x - cameraOrbit.targetX;
+  const dz = player.z - cameraOrbit.targetZ;
+  const dist = Math.hypot(dx, dz);
+  if (dist <= CAMERA_FOLLOW_DEADZONE) {
+    return;
+  }
+
+  const excess = dist - CAMERA_FOLLOW_DEADZONE;
+  const dirX = dx / dist;
+  const dirZ = dz / dist;
+  const followStep = excess * Math.min(1, dt * CAMERA_FOLLOW_LERP);
+  cameraOrbit.targetX += dirX * followStep;
+  cameraOrbit.targetZ += dirZ * followStep;
+  applyCameraOrbit();
+}
+
+function ensureHarvestTreesPopulation() {
+  if (worldState.phase !== "day") {
+    return;
+  }
+  if (harvestTrees.length >= HARVEST_TREE_MIN_ACTIVE) {
+    return;
+  }
+  if (harvestTreePrototypePool.length === 0) {
+    return;
+  }
+
+  const toSpawn = HARVEST_TREE_MIN_ACTIVE - harvestTrees.length;
+  spawnHarvestTrees(toSpawn, HARVEST_TREE_MAX_GROWTH_STAGE);
+}
+
+function ensureHarvestStonesPopulation() {
+  if (worldState.phase !== "day") {
+    return;
+  }
+  if (harvestStones.length >= HARVEST_STONE_MIN_ACTIVE) {
+    return;
+  }
+  if (harvestStonePrototypePool.length === 0) {
+    return;
+  }
+
+  spawnHarvestStones(HARVEST_STONE_MIN_ACTIVE - harvestStones.length, HARVEST_STONE_MAX_GROWTH_STAGE);
+}
+
+function advanceHarvestTreeGrowthCycle() {
+  worldState.growthCycleCount += 1;
+  harvestTrees.forEach((tree) => {
+    if (tree.growthStage >= HARVEST_TREE_MAX_GROWTH_STAGE) {
+      return;
+    }
+    tree.growthStage += 1;
+    const scale = getHarvestGrowthScale(tree.growthStage);
+    tree.model.scale.setScalar(tree.baseScale * scale);
+    tree.hitCount = 0;
+    tree.shakeTimer = 0;
+    tree.model.rotation.x = 0;
+  });
+  spawnHarvestTrees(HARVEST_EXTRA_TREES_PER_DAY, 0);
+
+  harvestStones.forEach((stone) => {
+    if (stone.growthStage >= HARVEST_STONE_MAX_GROWTH_STAGE) {
+      return;
+    }
+    stone.growthStage += 1;
+    const scale = getHarvestGrowthScale(stone.growthStage);
+    stone.model.scale.setScalar(stone.baseScale * scale);
+    stone.hitCount = 0;
+    stone.shakeTimer = 0;
+    stone.model.rotation.set(0, stone.model.rotation.y, 0);
+  });
+  spawnHarvestStones(HARVEST_EXTRA_STONES_PER_DAY, 0);
+}
+
+function updateHarvestTrees(dt) {
+  for (let index = harvestTrees.length - 1; index >= 0; index -= 1) {
+    const tree = harvestTrees[index];
+
+    if (!tree.model?.parent) {
+      harvestTrees.splice(index, 1);
+      continue;
+    }
+
+    if (tree.falling) {
+      tree.fallProgress += dt * 1.9;
+      if (Math.hypot(tree.fallDirX || 0, tree.fallDirZ || 0) > 0.0001) {
+        tree.model.rotation.y = Math.atan2(tree.fallDirX, tree.fallDirZ);
+      }
+      const fallAngle = Math.min(1.45, tree.fallProgress * 1.45);
+      tree.model.rotation.x = -fallAngle;
+      if (tree.fallProgress >= 1) {
+        if ((tree.fallDropPickupCycles || 0) > 0) {
+          finalizeHarvestedTree(tree, { autoCollect: false, dropPickupCycles: tree.fallDropPickupCycles });
+        } else {
+          finalizeHarvestedTree(tree);
+        }
+      }
+      continue;
+    }
+
+    if (tree.shakeTimer > 0) {
+      tree.shakeTimer = Math.max(0, tree.shakeTimer - dt);
+      tree.shakePhase += dt * 30;
+      const shakeStrength = (tree.shakeTimer / 0.24) * 0.1;
+      tree.model.rotation.z = Math.sin(tree.shakePhase) * shakeStrength;
+      if (tree.shakeTimer <= 0) {
+        tree.model.rotation.z = 0;
+      }
+    }
+  }
+}
+
+function updateHarvestStones(dt) {
+  for (let index = harvestStones.length - 1; index >= 0; index -= 1) {
+    const stone = harvestStones[index];
+
+    if (!stone.model?.parent) {
+      harvestStones.splice(index, 1);
+      continue;
+    }
+
+    if (stone.falling) {
+      stone.fallProgress += dt * 2.3;
+      stone.model.rotation.x = Math.min(1.2, stone.fallProgress * 1.2);
+      stone.model.rotation.z = Math.sin(stone.fallProgress * 8) * 0.08;
+      if (stone.fallProgress >= 1) {
+        finalizeHarvestedStone(stone);
+      }
+      continue;
+    }
+
+    if (stone.shakeTimer > 0) {
+      stone.shakeTimer = Math.max(0, stone.shakeTimer - dt);
+      stone.shakePhase += dt * 34;
+      const shakeStrength = (stone.shakeTimer / 0.2) * 0.08;
+      stone.model.rotation.z = Math.sin(stone.shakePhase) * shakeStrength;
+      if (stone.shakeTimer <= 0) {
+        stone.model.rotation.z = 0;
+      }
+    }
+  }
+}
+
+function updateDayHarvestLoop(dt) {
+  if (worldState.phase !== "day" || worldState.gameOver || worldState.paused || ultimateBunkerSequence.active) {
+    setAxeEquipped(false);
+    playerAxeState.swingTimer = 0;
+    playerAxeState.autoChopCooldown = 0;
+    playerAxeState.autoMineCooldown = 0;
+    playerAxeState.fullAlertCooldown = 0;
+    playerAxeMount.rotation.set(0, 0, 0);
+    return;
+  }
+
+  const isOutsideBase = Math.hypot(player.x, player.z) > BASE_HQ_RADIUS + 6;
+  const nearbyTree = getNearestHarvestTree(HARVEST_TREE_AXE_RANGE, true);
+  const nearbyStone = getNearestHarvestStone(HARVEST_STONE_AXE_RANGE, true);
+  setAxeEquipped(isOutsideBase);
+
+  playerAxeState.autoChopCooldown = Math.max(0, playerAxeState.autoChopCooldown - dt);
+  playerAxeState.autoMineCooldown = Math.max(0, playerAxeState.autoMineCooldown - dt);
+  playerAxeState.fullAlertCooldown = Math.max(0, playerAxeState.fullAlertCooldown - dt);
+
+  ensureHarvestTreesPopulation();
+  ensureHarvestStonesPopulation();
+
+  tryDepositCarriedLogs();
+
+  if (playerAxeState.equipped && nearbyTree && playerAxeState.autoChopCooldown <= 0) {
+    performTreeChop(nearbyTree);
+    playerAxeState.autoChopCooldown = 0.44;
+  }
+  if (playerAxeState.equipped && nearbyStone && playerAxeState.autoMineCooldown <= 0) {
+    performStoneMine(nearbyStone);
+    playerAxeState.autoMineCooldown = 0.48;
+  }
+
+  if (playerAxeState.swingTimer > 0) {
+    playerAxeState.swingTimer = Math.max(0, playerAxeState.swingTimer - dt);
+    const swingAlpha = playerAxeState.swingDuration > 0
+      ? 1 - (playerAxeState.swingTimer / playerAxeState.swingDuration)
+      : 1;
+    playerAxeMount.rotation.z = -Math.sin(swingAlpha * Math.PI) * 1.05;
+    playerAxeMount.rotation.x = -Math.sin(swingAlpha * Math.PI) * 0.4;
+  } else {
+    playerAxeMount.rotation.z *= Math.max(0, 1 - dt * 18);
+    playerAxeMount.rotation.x *= Math.max(0, 1 - dt * 18);
+  }
+
+  updateHarvestTrees(dt);
+  updateHarvestStones(dt);
+}
+
 function applyBaseUpgradeVisuals() {
   if (baseFenceMainGroup) {
     baseFenceMainGroup.visible = worldState.baseUpgradeLevel <= 0;
@@ -1967,6 +3358,124 @@ function applyBaseUpgradeVisuals() {
   if (baseBrickWallGroup) {
     baseBrickWallGroup.visible = worldState.baseUpgradeLevel >= 2;
   }
+}
+
+function getActivePerimeterGroup() {
+  if (worldState.baseUpgradeLevel >= 2 && baseBrickWallGroup) {
+    return baseBrickWallGroup;
+  }
+  if (worldState.baseUpgradeLevel === 1 && baseFenceInnerGroup) {
+    return baseFenceInnerGroup;
+  }
+  return baseFenceMainGroup;
+}
+
+function getSegmentIndexFromAngle(angle) {
+  const count = baseFenceSegmentCount || getActivePerimeterGroup()?.userData?.segmentCount || 40;
+  const normalized = THREE.MathUtils.euclideanModulo(angle, Math.PI * 2);
+  return Math.floor((normalized / (Math.PI * 2)) * count) % count;
+}
+
+function ensureBreachAlertSprite() {
+  if (breachAlertSprite) {
+    return;
+  }
+  breachAlertSprite = createLabelSprite("BREACH DETECTED");
+  breachAlertSprite.position.set(ULT_BUNKER_POSITION.x, ULT_BUNKER_HOUSE_HEIGHT + 15, ULT_BUNKER_POSITION.z);
+  breachAlertSprite.visible = false;
+  scene.add(breachAlertSprite);
+}
+
+function triggerBreach(segmentIndex = -1) {
+  if (worldState.breach.active) {
+    return false;
+  }
+  const group = getActivePerimeterGroup();
+  const segments = group?.userData?.segmentMeshes;
+  if (!group || !segments || segments.length === 0) {
+    return false;
+  }
+
+  const openingIndex = segmentIndex >= 0
+    ? segmentIndex % segments.length
+    : (worldState.breach.lastHitSegmentIndex >= 0 ? worldState.breach.lastHitSegmentIndex : 0);
+
+  const openingSegment = segments[openingIndex];
+  const openingAngle = Math.atan2(openingSegment.position.z, openingSegment.position.x);
+
+  worldState.breach.active = true;
+  worldState.breach.openingIndex = openingIndex;
+  worldState.breach.openingPoint.x = Math.cos(openingAngle) * BASE_HQ_RADIUS;
+  worldState.breach.openingPoint.z = Math.sin(openingAngle) * BASE_HQ_RADIUS;
+  worldState.breach.modifiedSegments = [];
+  worldState.breach.bunkerHp = worldState.breach.bunkerMaxHp;
+
+  const offsets = [-1, 0, 1];
+  offsets.forEach((offset) => {
+    const idx = (openingIndex + offset + segments.length) % segments.length;
+    const segment = segments[idx];
+    if (!segment) {
+      return;
+    }
+
+    worldState.breach.modifiedSegments.push({
+      segment,
+      visible: segment.visible,
+      rotationY: segment.rotation.y,
+    });
+
+    const worldPos = new THREE.Vector3();
+    segment.getWorldPosition(worldPos);
+    spawnCannonBlastEffect(worldPos.x, worldPos.z, 12);
+
+    if (offset === 0) {
+      segment.visible = false;
+    } else {
+      segment.rotation.y += offset < 0 ? Math.PI * 0.5 : -Math.PI * 0.5;
+    }
+  });
+
+  ensureBreachAlertSprite();
+  if (breachAlertSprite) {
+    breachAlertSprite.visible = true;
+  }
+  return true;
+}
+
+function closeBreach() {
+  worldState.breach.modifiedSegments.forEach((entry) => {
+    if (!entry.segment) {
+      return;
+    }
+    entry.segment.visible = entry.visible;
+    entry.segment.rotation.y = entry.rotationY;
+  });
+  worldState.breach.modifiedSegments = [];
+  worldState.breach.active = false;
+  worldState.breach.openingIndex = -1;
+  worldState.breach.bunkerHp = 0;
+  if (breachAlertSprite) {
+    breachAlertSprite.visible = false;
+  }
+}
+
+function updateBreachEffects(nowSeconds) {
+  if (!worldState.breach.active) {
+    breachSirenLight.intensity = 0;
+    if (breachAlertSprite) {
+      breachAlertSprite.visible = false;
+    }
+    return;
+  }
+  ensureBreachAlertSprite();
+  if (breachAlertSprite) {
+    breachAlertSprite.visible = true;
+    breachAlertSprite.position.set(ULT_BUNKER_POSITION.x, ULT_BUNKER_HOUSE_HEIGHT + 15, ULT_BUNKER_POSITION.z);
+  }
+
+  const pulse = (Math.sin(nowSeconds * 12) + 1) * 0.5;
+  breachSirenLight.intensity = 1.8 + pulse * 2.2;
+  breachSirenLight.color.setHex(pulse > 0.5 ? 0xff3344 : 0x3377ff);
 }
 
 function loadReloadPropsModels() {
@@ -2038,6 +3547,10 @@ const worldState = {
   gameOver: false,
   highScore: Number(localStorage.getItem("baseDefenseHighScore") || 0),
   credits: 0,
+  woodStock: 0,
+  stoneStock: 0,
+  carriedLogs: 0,
+  growthCycleCount: 0,
   totalKills: 0,
   phase: "day",
   dayNumber: 1,
@@ -2062,13 +3575,22 @@ const worldState = {
   timeScaleDay: 1,
   baseUpgradeLevel: 0,
   activeShopTab: "player",
+  breach: {
+    active: false,
+    openingIndex: -1,
+    openingPoint: { x: 0, z: 0 },
+    modifiedSegments: [],
+    lastHitSegmentIndex: -1,
+    bunkerHp: 0,
+    bunkerMaxHp: BREACH_BUNKER_MAX_HP,
+  },
   selectedTurretId: null,
   ownedWeapons: new Set(["glock"]),
   ownedAttachments: new Set(),
   ultimate: {
     cooldown: 60,
-    timer: 60,
-    hasStarted: false,
+    timer: 0,
+    hasStarted: true,
     damage: 120,
     radius: 130,
   },
@@ -2259,7 +3781,29 @@ function buyAttachment(attachmentId) {
 
 function buyRepair(repairId) {
   const repair = repairs.find((item) => item.id === repairId);
-  if (!repair || worldState.credits < repair.cost || base.hp >= base.maxHp) {
+  if (!repair) {
+    return;
+  }
+
+  if (repair.target === "breach") {
+    if (!worldState.breach.active || worldState.phase !== "day" || worldState.woodStock < repair.cost) {
+      return;
+    }
+    worldState.woodStock -= repair.cost;
+    closeBreach();
+    return;
+  }
+
+  if (repair.target === "bunker") {
+    if (!worldState.breach.active || worldState.credits < repair.cost || worldState.breach.bunkerHp >= worldState.breach.bunkerMaxHp) {
+      return;
+    }
+    worldState.credits -= repair.cost;
+    worldState.breach.bunkerHp = Math.min(worldState.breach.bunkerMaxHp, worldState.breach.bunkerHp + repair.hp);
+    return;
+  }
+
+  if (worldState.credits < repair.cost || base.hp >= base.maxHp) {
     return;
   }
   worldState.credits -= repair.cost;
@@ -2273,15 +3817,17 @@ function buyBaseUpgrade(level) {
   if (worldState.baseUpgradeLevel !== level - 1) {
     return;
   }
-  const cost = baseUpgradeCosts[level - 1];
-  if (worldState.credits < cost) {
+  const woodCost = baseUpgradeWoodCosts[level - 1] || 0;
+  const stoneCost = baseUpgradeStoneCosts[level - 1] || 0;
+  if (worldState.woodStock < woodCost || worldState.stoneStock < stoneCost) {
     return;
   }
   const targetMaxHp = BASE_HP_TIERS[level];
   if (!targetMaxHp) {
     return;
   }
-  worldState.credits -= cost;
+  worldState.woodStock -= woodCost;
+  worldState.stoneStock -= stoneCost;
   const missingHp = Math.max(0, base.maxHp - base.hp);
   worldState.baseUpgradeLevel = level;
   base.maxHp = targetMaxHp;
@@ -2454,18 +4000,33 @@ function updateShopUi() {
 
   shopRepairListEl.querySelectorAll(".shop-btn").forEach((button) => {
     const repair = repairs.find((item) => item.id === button.dataset.repairId);
-    const canBuy = worldState.credits >= repair.cost && base.hp < base.maxHp;
+    let canBuy = false;
+    if (repair.target === "breach") {
+      canBuy = worldState.breach.active && worldState.phase === "day" && worldState.woodStock >= repair.cost;
+    } else if (repair.target === "bunker") {
+      canBuy = worldState.breach.active && worldState.credits >= repair.cost && worldState.breach.bunkerHp < worldState.breach.bunkerMaxHp;
+    } else {
+      canBuy = worldState.credits >= repair.cost && base.hp < base.maxHp;
+    }
     button.disabled = !canBuy;
-    setShopButtonContent(button, `${repair.name} · ${repair.cost}`, "", "🛠️");
+    const repairCostLabel = repair.resource === "wood" ? `${repair.cost} Wood` : `${repair.cost}`;
+    setShopButtonContent(button, `${repair.name} · ${repairCostLabel}`, "", "🛠️");
   });
 
   shopBaseUpgradeListEl.querySelectorAll(".shop-btn").forEach((button) => {
     const level = Number(button.dataset.baseUpgradeLevel);
-    const cost = baseUpgradeCosts[level - 1];
     const owned = worldState.baseUpgradeLevel >= level;
-    const canBuy = worldState.baseUpgradeLevel === level - 1 && worldState.credits >= cost;
+    const woodCost = baseUpgradeWoodCosts[level - 1] || 0;
+    const stoneCost = baseUpgradeStoneCosts[level - 1] || 0;
+    const canBuy =
+      worldState.baseUpgradeLevel === level - 1 &&
+      worldState.woodStock >= woodCost &&
+      worldState.stoneStock >= stoneCost;
     button.disabled = !canBuy;
-    setShopButtonContent(button, owned ? `Wall Lv${level} · Owned` : `Wall Lv${level} · Buy ${cost}`, "", "🧱");
+    const costText = stoneCost > 0
+      ? `${woodCost} Wood + ${stoneCost} Stone`
+      : `${woodCost} Wood`;
+    setShopButtonContent(button, owned ? `Wall Lv${level} · Owned` : `Wall Lv${level} · ${costText}`, "", "🧱");
   });
 
   shopTurretListEl.querySelectorAll(".shop-btn").forEach((button) => {
@@ -2529,6 +4090,15 @@ function clampPosition() {
   const halfD = worldSize.depth / 2 - 8;
   player.x = Math.max(-halfW, Math.min(halfW, player.x));
   player.z = Math.max(-halfD, Math.min(halfD, player.z));
+
+  const dx = player.x - ULT_BUNKER_POSITION.x;
+  const dz = player.z - ULT_BUNKER_POSITION.z;
+  const dist = Math.hypot(dx, dz);
+  if (dist > 0.0001 && dist < ULT_BUNKER_COLLISION_RADIUS) {
+    const push = ULT_BUNKER_COLLISION_RADIUS / dist;
+    player.x = ULT_BUNKER_POSITION.x + dx * push;
+    player.z = ULT_BUNKER_POSITION.z + dz * push;
+  }
 }
 
 function getBaseNightEnemyCount(nightNumber) {
@@ -2640,12 +4210,17 @@ function getBossEnemyTypeForNight(nightNumber) {
     damage: Math.max(22, expected.damage * 2.4),
     reward: Math.max(1, Math.floor(expectedHordeReward / 2)),
     radius: 18.5,
+    hitRadius: regularEnemyTiers.level2.radius * 1,
     color: 0xc58dff,
     modelTier: 2,
     modelScale: 2.35,
     facingOffset: CHARACTER_FACING_OFFSET_BY_TIER[2],
     isBoss: true,
   };
+}
+
+function getEnemyHitRadius(enemy) {
+  return enemy.hitRadius ?? enemy.radius;
 }
 
 function getEnemyTypeForNight() {
@@ -2943,6 +4518,7 @@ function spawnEnemy() {
     damagePerSecond: enemyType.damage,
     reward: enemyType.reward,
     radius: enemyType.radius,
+    hitRadius: enemyType.hitRadius ?? enemyType.radius,
     isBoss: !!enemyType.isBoss,
     isCharacterModel: useCharacterModel,
     facingYaw: initialFacingYaw,
@@ -3492,7 +5068,7 @@ function applyAreaDamage(x, z, radius, damage) {
     const enemy = enemies[index];
     const dx = enemy.x - x;
     const dz = enemy.z - z;
-    if (Math.hypot(dx, dz) <= radius + enemy.radius) {
+    if (Math.hypot(dx, dz) <= radius + getEnemyHitRadius(enemy)) {
       enemy.hp -= damage;
       if (enemy.hp <= 0) {
         removeEnemy(enemy);
@@ -3669,7 +5245,7 @@ function updateMuzzleFlashes(dt) {
   }
 }
 
-function spawnCreepDust(enemy, moveDirX, moveDirZ) {
+function spawnCreepDust(enemy, moveDirX, moveDirZ, scaleMultiplier = 1, lifeMultiplier = 1, opacityMultiplier = 1) {
   const mesh = new THREE.Mesh(creepDustGeometry, creepDustMaterial.clone());
   const sideX = -moveDirZ;
   const sideZ = moveDirX;
@@ -3679,14 +5255,17 @@ function spawnCreepDust(enemy, moveDirX, moveDirZ) {
     0.26,
     enemy.z - moveDirZ * 1.7 + sideZ * sideOffset
   );
-  const startScale = 0.78 + Math.random() * 0.45;
+  const startScale = (0.78 + Math.random() * 0.45) * scaleMultiplier;
   mesh.scale.setScalar(startScale);
+  mesh.material.opacity = Math.min(0.9, mesh.material.opacity * opacityMultiplier);
   scene.add(mesh);
+
+  const dustLife = 0.62 * lifeMultiplier;
 
   creepDustPuffs.push({
     mesh,
-    life: 0.62,
-    maxLife: 0.62,
+    life: dustLife,
+    maxLife: dustLife,
     growth: 2.3 + Math.random() * 0.9,
     driftX: sideX * ((Math.random() * 2 - 1) * 1.6),
     driftZ: sideZ * ((Math.random() * 2 - 1) * 1.6),
@@ -3716,20 +5295,125 @@ function updateCreepDust(dt) {
 const ultimateWaves = [];
 
 function spawnUltimateWave(x, z, maxRadius) {
-  const mesh = new THREE.Mesh(
-    new THREE.RingGeometry(1.4, 2.6, 64),
+  const shockwaveMesh = new THREE.Mesh(
+    new THREE.RingGeometry(1.2, 2.4, 72),
     new THREE.MeshBasicMaterial({
-      color: 0xf6cc55,
+      color: 0xffcf73,
+      transparent: true,
+      opacity: 0.95,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    })
+  );
+  shockwaveMesh.rotation.x = -Math.PI / 2;
+  shockwaveMesh.position.set(x, 0.25, z);
+  scene.add(shockwaveMesh);
+
+  const stemMesh = new THREE.Mesh(
+    new THREE.CylinderGeometry(1.1, 2.6, 1, 18, 1, true),
+    new THREE.MeshStandardMaterial({
+      color: 0x5d5f66,
+      emissive: 0x2f1a10,
+      emissiveIntensity: 0.55,
+      roughness: 0.92,
+      transparent: true,
+      opacity: 0.92,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    })
+  );
+  stemMesh.position.set(x, 0.9, z);
+  scene.add(stemMesh);
+
+  const capMesh = new THREE.Mesh(
+    new THREE.SphereGeometry(1, 24, 18),
+    new THREE.MeshStandardMaterial({
+      color: 0x6e727b,
+      emissive: 0x3a2519,
+      emissiveIntensity: 0.45,
+      roughness: 0.88,
       transparent: true,
       opacity: 0.9,
-      side: THREE.DoubleSide,
       depthWrite: false,
     })
   );
-  mesh.rotation.x = -Math.PI / 2;
-  mesh.position.set(x, 0.25, z);
-  scene.add(mesh);
-  ultimateWaves.push({ mesh, life: 0.35, maxLife: 0.35, maxRadius });
+  capMesh.position.set(x, 10, z);
+  scene.add(capMesh);
+
+  const crownMesh = new THREE.Mesh(
+    new THREE.SphereGeometry(1, 24, 18),
+    new THREE.MeshStandardMaterial({
+      color: 0x666a73,
+      emissive: 0x29170f,
+      emissiveIntensity: 0.42,
+      roughness: 0.92,
+      transparent: true,
+      opacity: 0.84,
+      depthWrite: false,
+    })
+  );
+  crownMesh.position.set(x, 8, z);
+  scene.add(crownMesh);
+
+  const smokePuffs = [];
+  const puffCount = 18;
+  for (let index = 0; index < puffCount; index += 1) {
+    const puff = new THREE.Mesh(
+      new THREE.SphereGeometry(1, 12, 10),
+      new THREE.MeshStandardMaterial({
+        color: 0x777c86,
+        emissive: 0x24140e,
+        emissiveIntensity: 0.36,
+        roughness: 0.95,
+        transparent: true,
+        opacity: 0.86,
+        depthWrite: false,
+      })
+    );
+    puff.position.set(x, 8, z);
+    scene.add(puff);
+    smokePuffs.push({
+      mesh: puff,
+      angle: (Math.PI * 2 * index) / puffCount,
+      radial: 0.55 + Math.random() * 0.85,
+      lift: 0.7 + Math.random() * 1.1,
+      driftSpeed: 0.7 + Math.random() * 0.55,
+      spinOffset: Math.random() * Math.PI * 2,
+    });
+  }
+
+  ultimateWaves.push({
+    life: 1.45,
+    maxLife: 1.45,
+    maxRadius,
+    shockwaveMesh,
+    stemMesh,
+    capMesh,
+    crownMesh,
+    smokePuffs,
+  });
+}
+
+function disposeUltimateWave(wave) {
+  const disposeMesh = (mesh) => {
+    if (!mesh) {
+      return;
+    }
+    scene.remove(mesh);
+    mesh.geometry?.dispose?.();
+    if (Array.isArray(mesh.material)) {
+      mesh.material.forEach((material) => material?.dispose?.());
+    } else {
+      mesh.material?.dispose?.();
+    }
+  };
+
+  disposeMesh(wave.shockwaveMesh);
+  disposeMesh(wave.stemMesh);
+  disposeMesh(wave.capMesh);
+  disposeMesh(wave.crownMesh);
+  wave.smokePuffs?.forEach((puff) => disposeMesh(puff.mesh));
 }
 
 function updateUltimateWaves(dt) {
@@ -3737,15 +5421,47 @@ function updateUltimateWaves(dt) {
     const wave = ultimateWaves[index];
     wave.life -= dt;
     const alpha = Math.max(0, wave.life / wave.maxLife);
-    const progress = Math.max(0, Math.min(1, 1 - wave.life / wave.maxLife));
-    const radius = Math.max(1.4, wave.maxRadius * progress);
-    wave.mesh.material.opacity = 0.92 * alpha;
-    wave.mesh.scale.set(radius, radius, 1);
+    const progress = Math.max(0, Math.min(1, 1 - alpha));
+    const eased = 1 - Math.pow(1 - progress, 3);
+    const burstGlow = Math.exp(-progress * 7.5);
+
+    const shockwaveRadius = Math.max(1.2, wave.maxRadius * (0.16 + eased * 1.25));
+    wave.shockwaveMesh.material.opacity = (0.95 * alpha) + burstGlow * 0.18;
+    wave.shockwaveMesh.scale.set(shockwaveRadius, shockwaveRadius, 1);
+
+    const stemHeight = 4 + eased * (wave.maxRadius * 0.92);
+    const stemRadius = 2.4 + eased * (wave.maxRadius * 0.065);
+    wave.stemMesh.position.y = 0.22 + stemHeight * 0.5;
+    wave.stemMesh.scale.set(stemRadius, stemHeight, stemRadius);
+    wave.stemMesh.material.opacity = 0.78 * alpha + burstGlow * 0.12;
+
+    const capRadius = Math.max(6, wave.maxRadius * (0.18 + eased * 0.65));
+    const capY = stemHeight + 8 + Math.sin(eased * Math.PI) * 3.4;
+    wave.capMesh.position.y = capY;
+    wave.capMesh.scale.set(capRadius * 1.02, capRadius * 0.86, capRadius * 1.02);
+    wave.capMesh.material.opacity = 0.76 * alpha + burstGlow * 0.2;
+
+    const crownRadius = Math.max(5, capRadius * 1.22);
+    wave.crownMesh.position.y = capY - capRadius * 0.26;
+    wave.crownMesh.scale.set(crownRadius, crownRadius * 0.62, crownRadius);
+    wave.crownMesh.material.opacity = 0.6 * alpha + burstGlow * 0.14;
+
+    wave.smokePuffs.forEach((puff, puffIndex) => {
+      const puffOrbit = capRadius * (0.32 + puff.radial * 0.68);
+      const puffAngle = puff.angle + progress * puff.driftSpeed + puff.spinOffset * 0.18;
+      const puffY = capY - capRadius * 0.18 + Math.sin(progress * 7 + puffIndex * 0.45) * puff.lift * 1.1;
+      puff.mesh.position.set(
+        wave.shockwaveMesh.position.x + Math.cos(puffAngle) * puffOrbit,
+        puffY,
+        wave.shockwaveMesh.position.z + Math.sin(puffAngle) * puffOrbit
+      );
+      const puffScale = capRadius * (0.12 + puff.radial * 0.18);
+      puff.mesh.scale.setScalar(puffScale);
+      puff.mesh.material.opacity = Math.max(0, (0.58 + burstGlow * 0.2) * alpha);
+    });
 
     if (wave.life <= 0) {
-      scene.remove(wave.mesh);
-      wave.mesh.geometry.dispose();
-      wave.mesh.material.dispose();
+      disposeUltimateWave(wave);
       ultimateWaves.splice(index, 1);
     }
   }
@@ -3879,7 +5595,8 @@ function createBullet(
   owner,
   penetration = 0,
   projectileType = "player",
-  splashRadius = 0
+  splashRadius = 0,
+  originY = null
 ) {
   const dx = targetX - originX;
   const dz = targetZ - originZ;
@@ -3891,7 +5608,7 @@ function createBullet(
   if (owner === "player" || (owner === "turret" && projectileType === "smg")) {
     mesh.scale.setScalar(0.5);
   }
-  mesh.position.set(originX, owner === "player" ? 12 : 4.8, originZ);
+  mesh.position.set(originX, originY ?? (owner === "player" ? 12 : 4.8), originZ);
   scene.add(mesh);
 
   const container = owner === "player" ? bullets : turretBullets;
@@ -3913,8 +5630,21 @@ function createBullet(
 }
 
 function getNearestEnemy(x, z, maxRange = Number.POSITIVE_INFINITY) {
+  const isBreachPriorityEnemy = (enemy) => {
+    if (!worldState.breach.active) {
+      return false;
+    }
+    const opening = worldState.breach.openingPoint;
+    return (
+      Math.hypot(enemy.x, enemy.z) <= BASE_HQ_RADIUS + 18 ||
+      Math.hypot(enemy.x - opening.x, enemy.z - opening.z) <= 28
+    );
+  };
+
   let nearest = null;
   let minDist = Number.POSITIVE_INFINITY;
+  let nearestBreach = null;
+  let minBreachDist = Number.POSITIVE_INFINITY;
   enemies.forEach((enemy) => {
     const dx = enemy.x - x;
     const dz = enemy.z - z;
@@ -3923,13 +5653,30 @@ function getNearestEnemy(x, z, maxRange = Number.POSITIVE_INFINITY) {
       minDist = dist;
       nearest = enemy;
     }
+    if (isBreachPriorityEnemy(enemy) && dist <= maxRange && dist < minBreachDist) {
+      minBreachDist = dist;
+      nearestBreach = enemy;
+    }
   });
-  return nearest;
+  return nearestBreach || nearest;
 }
 
 function getNearestEnemyExcluding(x, z, maxRange = Number.POSITIVE_INFINITY, excludeEnemy = null) {
+  const isBreachPriorityEnemy = (enemy) => {
+    if (!worldState.breach.active) {
+      return false;
+    }
+    const opening = worldState.breach.openingPoint;
+    return (
+      Math.hypot(enemy.x, enemy.z) <= BASE_HQ_RADIUS + 18 ||
+      Math.hypot(enemy.x - opening.x, enemy.z - opening.z) <= 28
+    );
+  };
+
   let nearest = null;
   let minDist = Number.POSITIVE_INFINITY;
+  let nearestBreach = null;
+  let minBreachDist = Number.POSITIVE_INFINITY;
   enemies.forEach((enemy) => {
     if (enemy === excludeEnemy) {
       return;
@@ -3941,8 +5688,12 @@ function getNearestEnemyExcluding(x, z, maxRange = Number.POSITIVE_INFINITY, exc
       minDist = dist;
       nearest = enemy;
     }
+    if (isBreachPriorityEnemy(enemy) && dist <= maxRange && dist < minBreachDist) {
+      minBreachDist = dist;
+      nearestBreach = enemy;
+    }
   });
-  return nearest;
+  return nearestBreach || nearest;
 }
 
 function disposeEnemyVisual(enemy) {
@@ -4004,7 +5755,7 @@ function updateProjectiles(container, dt) {
       if (bullet.pierced.has(enemy)) {
         continue;
       }
-      if (Math.hypot(dx, dz) <= enemy.radius + bullet.radius) {
+      if (Math.hypot(dx, dz) <= getEnemyHitRadius(enemy) + bullet.radius) {
         enemy.hp -= bullet.damage;
         bullet.pierced.add(enemy);
         const hitY = enemy.isCharacterModel ? enemy.walkBaseY + enemy.radius * 1.35 : enemy.radius + 1.8;
@@ -4067,6 +5818,15 @@ function updateProjectiles(container, dt) {
       }
     }
 
+    if (!hit && bullet.projectileType === "cannon") {
+      const treeHitRadius = Math.max(8, bullet.splashRadius * 0.42);
+      const hitTree = getHarvestTreeNearPoint(bullet.x, bullet.z, treeHitRadius, false);
+      if (hitTree) {
+        knockdownHarvestTreeByCannon(hitTree, bullet.vx, bullet.vz);
+        hit = true;
+      }
+    }
+
     if (
       hit ||
       bullet.life <= 0 ||
@@ -4090,10 +5850,24 @@ function updateEnemies(dt) {
       ? Math.max(0, (enemy.hitReactTime || 0) / enemy.hitReactDuration)
       : 0;
 
-    const dx = -enemy.x;
-    const dz = -enemy.z;
+    let targetX = 0;
+    let targetZ = 0;
+    if (worldState.breach.active) {
+      const toOpening = Math.hypot(enemy.x - worldState.breach.openingPoint.x, enemy.z - worldState.breach.openingPoint.z);
+      const centerDist = Math.hypot(enemy.x, enemy.z);
+      if (centerDist > BASE_HQ_RADIUS - 10 && toOpening > 9) {
+        targetX = worldState.breach.openingPoint.x;
+        targetZ = worldState.breach.openingPoint.z;
+      }
+    }
+
+    const dx = targetX - enemy.x;
+    const dz = targetZ - enemy.z;
     const dist = Math.hypot(dx, dz) || 1;
-    const stop = base.radius + enemy.radius;
+    const seekingOpening = worldState.breach.active && (targetX !== 0 || targetZ !== 0);
+    const stop = seekingOpening
+      ? getEnemyHitRadius(enemy) + 1.5
+      : base.radius + getEnemyHitRadius(enemy);
 
     if (dist > stop) {
       const moveDirX = dx / dist;
@@ -4125,7 +5899,16 @@ function updateEnemies(dt) {
         }
       }
     } else {
-      base.hp = Math.max(0, base.hp - enemy.damagePerSecond * dt);
+      if (!worldState.breach.active) {
+        const hitAngle = Math.atan2(enemy.z, enemy.x);
+        worldState.breach.lastHitSegmentIndex = getSegmentIndexFromAngle(hitAngle);
+      }
+
+      if (worldState.breach.active && worldState.breach.bunkerHp > 0) {
+        worldState.breach.bunkerHp = Math.max(0, worldState.breach.bunkerHp - enemy.damagePerSecond * dt);
+      } else {
+        base.hp = Math.max(0, base.hp - enemy.damagePerSecond * dt);
+      }
       if (enemy.isCharacterModel) {
         enemy.shamblePhase += dt * 26;
         const latchShakeX = Math.sin(enemy.shamblePhase * 3.8) * ENEMY_CHOMP_SHAKE;
@@ -4233,24 +6016,33 @@ function fireTwinFlakShots(turret, target, speed, totalDamage, penetration = 2) 
   const rightZ = turret.z - perpZ * spread;
 
   const forwardOffset = 12.5;
+  const activeMesh = getActiveTurretMesh(turret);
+  activeMesh.getWorldPosition(turretMuzzleWorldPos);
+  const muzzleY = turretMuzzleWorldPos.y + 0.95;
   const leftMuzzleX = leftX + dirX * forwardOffset;
   const leftMuzzleZ = leftZ + dirZ * forwardOffset;
   const rightMuzzleX = rightX + dirX * forwardOffset;
   const rightMuzzleZ = rightZ + dirZ * forwardOffset;
 
-  createBullet(leftMuzzleX, leftMuzzleZ, target.x, target.z, speed, perShotDamage, "turret", penetration, "flak", 0);
-  createBullet(rightMuzzleX, rightMuzzleZ, target.x, target.z, speed, perShotDamage, "turret", penetration, "flak", 0);
-  spawnMuzzleFlash(leftMuzzleX, leftMuzzleZ, dirX, dirZ, "turret", "mesh");
-  spawnMuzzleFlash(rightMuzzleX, rightMuzzleZ, dirX, dirZ, "turret", "mesh");
+  createBullet(leftMuzzleX, leftMuzzleZ, target.x, target.z, speed, perShotDamage, "turret", penetration, "flak", 0, muzzleY);
+  createBullet(rightMuzzleX, rightMuzzleZ, target.x, target.z, speed, perShotDamage, "turret", penetration, "flak", 0, muzzleY);
+  spawnMuzzleFlash(leftMuzzleX, leftMuzzleZ, dirX, dirZ, "turret", "mesh", muzzleY);
+  spawnMuzzleFlash(rightMuzzleX, rightMuzzleZ, dirX, dirZ, "turret", "mesh", muzzleY);
 }
 
-function getTurretMuzzleOrigin(turretX, turretZ, dirX, dirZ, projectileType = "smg", mounted = false) {
+function getTurretMuzzleOrigin(turret, dirX, dirZ, projectileType = "smg", mounted = false) {
   const baseOffset = projectileType === "cannon" ? 17 : 12;
   const mountedBonus = mounted ? 3 : 0;
   const offset = baseOffset + mountedBonus;
+  const activeMesh = getActiveTurretMesh(turret);
+  const mountedRotator = activeMesh?.userData?.mountedRotator;
+  const referenceRoot = mounted && mountedRotator ? mountedRotator : activeMesh;
+  referenceRoot.getWorldPosition(turretMuzzleWorldPos);
+  const yOffset = projectileType === "cannon" ? 0.75 : mounted ? 1.1 : 0.95;
   return {
-    x: turretX + dirX * offset,
-    z: turretZ + dirZ * offset,
+    x: turret.x + dirX * offset,
+    z: turret.z + dirZ * offset,
+    y: turretMuzzleWorldPos.y + yOffset,
   };
 }
 
@@ -4317,7 +6109,7 @@ function updateTurrets(dt) {
       } else {
         const projectileType = turret.level >= 4 ? "cannon" : "smg";
         const splashRadius = turret.level >= 4 ? 22 : 0;
-        const muzzleOrigin = getTurretMuzzleOrigin(turret.x, turret.z, dirX, dirZ, projectileType, false);
+        const muzzleOrigin = getTurretMuzzleOrigin(turret, dirX, dirZ, projectileType, false);
         createBullet(
           muzzleOrigin.x,
           muzzleOrigin.z,
@@ -4328,14 +6120,15 @@ function updateTurrets(dt) {
           "turret",
           turret.level === 2 ? 1 : 0,
           projectileType,
-          splashRadius
+          splashRadius,
+          muzzleOrigin.y
         );
-        spawnMuzzleFlash(muzzleOrigin.x, muzzleOrigin.z, dirX, dirZ, "turret", "mesh");
+        spawnMuzzleFlash(muzzleOrigin.x, muzzleOrigin.z, dirX, dirZ, "turret", "mesh", muzzleOrigin.y);
         if (projectileType === "smg") {
-          spawnShellCasingEject("ar15", dirX, dirZ, turret.x, turret.z, 4.8, 1.1, HQ_SHELL_LANDING_Y);
+          spawnShellCasingEject("ar15", dirX, dirZ, turret.x, turret.z, muzzleOrigin.y, 1.1, HQ_SHELL_LANDING_Y);
         } else if (projectileType === "cannon") {
-          const cannonShellOrigin = getTurretMuzzleOrigin(turret.x, turret.z, dirX, dirZ, "cannon", false);
-          spawnShellCasingEject("cannon", dirX, dirZ, cannonShellOrigin.x, cannonShellOrigin.z, 6.4, 3.2, HQ_SHELL_LANDING_Y);
+          const cannonShellOrigin = getTurretMuzzleOrigin(turret, dirX, dirZ, "cannon", false);
+          spawnShellCasingEject("cannon", dirX, dirZ, cannonShellOrigin.x, cannonShellOrigin.z, cannonShellOrigin.y, 3.2, HQ_SHELL_LANDING_Y);
         }
       }
 
@@ -4356,7 +6149,7 @@ function updateTurrets(dt) {
           const mountLen = Math.hypot(mountDx, mountDz) || 1;
           const mountDirX = mountDx / mountLen;
           const mountDirZ = mountDz / mountLen;
-          const muzzleOrigin = getTurretMuzzleOrigin(turret.x, turret.z, mountDirX, mountDirZ, "smg", true);
+          const muzzleOrigin = getTurretMuzzleOrigin(turret, mountDirX, mountDirZ, "smg", true);
 
           createBullet(
             muzzleOrigin.x,
@@ -4368,10 +6161,11 @@ function updateTurrets(dt) {
             "turret",
             mountedStats.penetration,
             "smg",
-            0
+            0,
+            muzzleOrigin.y
           );
-          spawnMuzzleFlash(muzzleOrigin.x, muzzleOrigin.z, mountDirX, mountDirZ, "turret", "mesh");
-          spawnShellCasingEject("m249", mountDirX, mountDirZ, turret.x, turret.z, 4.9, 1.1, HQ_SHELL_LANDING_Y);
+          spawnMuzzleFlash(muzzleOrigin.x, muzzleOrigin.z, mountDirX, mountDirZ, "turret", "mesh", muzzleOrigin.y);
+          spawnShellCasingEject("m249", mountDirX, mountDirZ, turret.x, turret.z, muzzleOrigin.y, 1.1, HQ_SHELL_LANDING_Y);
         }
         turret.mountedCooldown = mountedStats.fireRate;
       }
@@ -4414,6 +6208,12 @@ function updatePlayerWeaponAim(dt) {
 }
 
 function updatePlayerShooting(dt) {
+  if (ultimateBunkerSequence.active) {
+    return;
+  }
+  if (playerAxeState.equipped) {
+    return;
+  }
   if (player.isReloading) {
     return;
   }
@@ -4478,6 +6278,9 @@ function updatePlayerShooting(dt) {
 }
 
 function updateMovement(dt) {
+  if (ultimateBunkerSequence.active) {
+    return;
+  }
   const xAxis = (worldState.keys.has("d") || worldState.keys.has("arrowright") ? 1 : 0) -
     (worldState.keys.has("a") || worldState.keys.has("arrowleft") ? 1 : 0);
   const zAxis = (worldState.keys.has("s") || worldState.keys.has("arrowdown") ? 1 : 0) -
@@ -4505,6 +6308,14 @@ function updateMovement(dt) {
   clampPosition();
   playerMesh.position.set(player.x, PLAYER_VISUAL_Y, player.z);
   setPlayerFacingFromDirection(moveDir.x, moveDir.z);
+
+  player.dustTimer -= dt;
+  if (player.dustTimer <= 0) {
+    for (let index = 0; index < PLAYER_DUST_PUFFS_PER_EMIT; index += 1) {
+      spawnCreepDust(player, moveDir.x, moveDir.z, 2);
+    }
+    player.dustTimer = PLAYER_DUST_EMIT_INTERVAL_MIN + Math.random() * PLAYER_DUST_EMIT_INTERVAL_VARIANCE;
+  }
 }
 
 function updateHud() {
@@ -4539,7 +6350,9 @@ function updateHud() {
     ? `Reloading: ${Math.max(0, Math.ceil(player.reloadTimer * 10) / 10)}s`
     : `Ammo: ${player.ammoInMag} / ${player.magSize}`;
 
-  if (!worldState.ultimate.hasStarted) {
+  if (ultimateBunkerSequence.active) {
+    ultimateStatusEl.textContent = "Ultimate: DEPLOYING...";
+  } else if (!worldState.ultimate.hasStarted) {
     ultimateStatusEl.textContent = "Ultimate: starts Night 1";
   } else if (worldState.ultimate.timer > 0) {
     ultimateStatusEl.textContent = `Ultimate: ${Math.ceil(worldState.ultimate.timer)}s`;
@@ -4548,7 +6361,11 @@ function updateHud() {
   } else {
     ultimateStatusEl.textContent = "Ultimate: READY (Q)";
   }
-  const ultimateReady = worldState.ultimate.hasStarted && worldState.ultimate.timer <= 0 && enemies.length > 0;
+  const ultimateReady =
+    !ultimateBunkerSequence.active &&
+    worldState.ultimate.hasStarted &&
+    worldState.ultimate.timer <= 0 &&
+    enemies.length > 0;
   ultimateStatusEl.classList.toggle("ready", ultimateReady);
 
   speedButtons.forEach((button) => {
@@ -4575,6 +6392,15 @@ function updateHud() {
     skipCurrentNightBtn.hidden = !showSkipNight;
     skipCurrentNightBtn.disabled = !showSkipNight;
   }
+
+  const nearBunkerForDrop =
+    worldState.carriedLogs > 0 &&
+    Math.hypot(player.x - ULT_BUNKER_POSITION.x, player.z - ULT_BUNKER_POSITION.z) <= ULT_BUNKER_HOUSE_RADIUS + 18;
+  const actionHint = nearBunkerForDrop ? " | Auto unloading..." : "";
+  const breachHint = worldState.breach.active
+    ? ` | BREACH! Bunker HP: ${Math.ceil(worldState.breach.bunkerHp)}/${worldState.breach.bunkerMaxHp}`
+    : "";
+  woodHudEl.textContent = `Wood: ${worldState.woodStock} | Stone: ${worldState.stoneStock} | Backpack: ${worldState.carriedLogs}/${MAX_CARRIED_LOGS}${actionHint}${breachHint}`;
 }
 
 function setPaused(value) {
@@ -4589,8 +6415,10 @@ function resetPrototype() {
   player.z = 34;
   player.facingYaw = 0;
   player.desiredFacingYaw = 0;
+  player.dustTimer = 0;
   player.weaponAimTimer = 0;
   playerWeaponRecoil = 0;
+  resetUltimateBunkerSequence();
   playerMesh.position.set(player.x, PLAYER_VISUAL_Y, player.z);
   playerMesh.rotation.y = player.facingYaw + PLAYER_FACING_OFFSET;
   playerWeaponMount.position.set(PLAYER_WEAPON_MOUNT_BASE_X, PLAYER_WEAPON_MOUNT_BASE_Y, PLAYER_WEAPON_MOUNT_BASE_Z);
@@ -4636,6 +6464,21 @@ function resetPrototype() {
     flash.mesh.geometry?.dispose?.();
     flash.mesh.material.dispose();
   });
+  axeSwooshes.splice(0).forEach((swoosh) => {
+    scene.remove(swoosh.mesh);
+    swoosh.mesh.geometry?.dispose?.();
+    swoosh.mesh.material.dispose();
+  });
+  droppedHarvestLogs.splice(0).forEach((pickup) => {
+    scene.remove(pickup.mesh);
+    pickup.mesh.geometry?.dispose?.();
+    pickup.mesh.material.dispose();
+  });
+  treeLeafParticles.splice(0).forEach((leaf) => {
+    scene.remove(leaf.mesh);
+    leaf.mesh.geometry?.dispose?.();
+    leaf.mesh.material.dispose();
+  });
   ejectedReloadProps.splice(0).forEach((prop) => {
     scene.remove(prop.mesh);
     prop.mesh.traverse?.((node) => {
@@ -4667,14 +6510,16 @@ function resetPrototype() {
     }
   });
   ultimateWaves.splice(0).forEach((wave) => {
-    scene.remove(wave.mesh);
-    wave.mesh.geometry.dispose();
-    wave.mesh.material.dispose();
+    disposeUltimateWave(wave);
   });
   clearSelectedTurretVisual();
 
   worldState.totalKills = 0;
   worldState.credits = 0;
+  worldState.woodStock = 0;
+  worldState.stoneStock = 0;
+  worldState.carriedLogs = 0;
+  worldState.growthCycleCount = 0;
   worldState.phase = "day";
   worldState.dayNumber = 1;
   worldState.nightNumber = 0;
@@ -4696,10 +6541,50 @@ function resetPrototype() {
   worldState.ownedWeapons = new Set(["glock"]);
   worldState.ownedAttachments = new Set();
   worldState.baseUpgradeLevel = 0;
+  closeBreach();
+  worldState.breach.lastHitSegmentIndex = -1;
   applyBaseUpgradeVisuals();
-  worldState.ultimate.timer = worldState.ultimate.cooldown;
-  worldState.ultimate.hasStarted = false;
+  worldState.ultimate.timer = 0;
+  worldState.ultimate.hasStarted = true;
   worldState.gameOver = false;
+  setAxeEquipped(false);
+  playerAxeState.swingTimer = 0;
+  playerAxeState.autoChopCooldown = 0;
+  playerAxeState.autoMineCooldown = 0;
+  playerAxeState.fullAlertCooldown = 0;
+  if (playerSpeechBubble.sprite) {
+    playerMesh.remove(playerSpeechBubble.sprite);
+    playerSpeechBubble.sprite.material.map?.dispose?.();
+    playerSpeechBubble.sprite.material.dispose?.();
+    playerSpeechBubble.sprite = null;
+    playerSpeechBubble.timer = 0;
+  }
+  woodSuckEffects.splice(0).forEach((effect) => {
+    scene.remove(effect.mesh);
+    effect.mesh.geometry?.dispose?.();
+    effect.mesh.material?.dispose?.();
+  });
+  updateCarriedLogsVisual();
+  if (fieldScatterPropsGroup) {
+    scene.remove(fieldScatterPropsGroup);
+    fieldScatterPropsGroup.traverse((node) => {
+      if (!node.isMesh) {
+        return;
+      }
+      node.geometry?.dispose?.();
+      if (Array.isArray(node.material)) {
+        node.material.forEach((material) => material?.dispose?.());
+      } else {
+        node.material?.dispose?.();
+      }
+    });
+    fieldScatterPropsGroup = null;
+    fieldScatterPropsBuilt = false;
+    fieldScatterPropsLoadStarted = false;
+  }
+  resetHarvestTrees(HARVEST_TREE_MAX_GROWTH_STAGE);
+  resetHarvestStones(HARVEST_STONE_MAX_GROWTH_STAGE);
+  loadFieldScatterProps();
   base.maxHp = BASE_HP_TIERS[0];
   base.hp = BASE_HP_TIERS[0];
   turrets.forEach((turret) => {
@@ -4725,25 +6610,26 @@ function activateUltimate() {
   if (
     worldState.gameOver ||
     worldState.paused ||
+    ultimateBunkerSequence.active ||
     !worldState.ultimate.hasStarted ||
     worldState.ultimate.timer > 0 ||
     enemies.length === 0
   ) {
     return;
   }
+
   worldState.ultimate.timer = worldState.ultimate.cooldown;
-  spawnUltimateWave(player.x, player.z, worldState.ultimate.radius);
-  for (let index = enemies.length - 1; index >= 0; index -= 1) {
-    const enemy = enemies[index];
-    const dx = enemy.x - player.x;
-    const dz = enemy.z - player.z;
-    if (Math.hypot(dx, dz) <= worldState.ultimate.radius) {
-      enemy.hp -= worldState.ultimate.damage;
-      if (enemy.hp <= 0) {
-        removeEnemy(enemy);
-      }
-    }
-  }
+  showPlayerSpeechBubble("FIRE IN THE HOLEEE", 1.25);
+
+  ultimateBunkerSequence.active = true;
+  ultimateBunkerSequence.phase = "moveToHatch";
+  ultimateBunkerSequence.phaseTime = 0;
+  ultimateBunkerSequence.startX = player.x;
+  ultimateBunkerSequence.startZ = player.z;
+  ultimateBunkerSequence.startYaw = player.facingYaw;
+  ultimateBunkerSequence.blastX = ULT_BUNKER_POSITION.x;
+  ultimateBunkerSequence.blastZ = ULT_BUNKER_POSITION.z;
+  ultimateBunkerSequence.hasDetonated = false;
 }
 
 function startNight() {
@@ -4814,6 +6700,7 @@ function startDay() {
   worldState.isBossWave = false;
   worldState.dayNumber += 1;
   worldState.dayTimer = 0;
+  advanceHarvestTreeGrowthCycle();
   applyPhaseVisuals("day");
   showSurvivedBanner(worldState.nightNumber);
 }
@@ -5176,7 +7063,13 @@ function tick(now) {
       }
     }
 
+    updateUltimateBunkerSequence(dt);
     updateMovement(dt);
+    updateCameraFollow(dt);
+    updateDayHarvestLoop(dt);
+    updateDroppedHarvestLogs(dt);
+    updateTreeLeafParticles(dt);
+    updatePlayerSpeechBubble(dt);
     updatePlayerShooting(dt);
     updatePlayerFacing(dt);
     updatePlayerWeaponAim(dt);
@@ -5189,19 +7082,33 @@ function tick(now) {
     updateZombieSplatters(dt);
     updateCreepDust(dt);
     updateMuzzleFlashes(dt);
+    updateAxeSwooshes(dt);
     updateEjectedProps(dt);
     updateUltimateWaves(dt);
+    updateWoodSuckEffects(dt);
     updateEnemies(dt);
     updateSelectedTurretVisual();
+    updateBreachEffects(now * 0.001);
 
     if (base.hp <= 0) {
-      base.hp = 0;
-      worldState.gameOver = true;
-      worldState.highScore = Math.max(worldState.highScore, worldState.totalKills);
-      localStorage.setItem("baseDefenseHighScore", String(worldState.highScore));
-      gameOverKillsEl.textContent = `Kills: ${worldState.totalKills}`;
-      gameOverHighScoreEl.textContent = `High Score: ${worldState.highScore}`;
-      gameOverModalEl.classList.remove("hidden");
+      if (!worldState.breach.active) {
+        const opened = triggerBreach(worldState.breach.lastHitSegmentIndex);
+        if (opened) {
+          base.hp = Math.max(1, Math.floor(base.maxHp * 0.22));
+        } else {
+          base.hp = 0;
+        }
+      }
+
+      if (base.hp <= 0) {
+        base.hp = 0;
+        worldState.gameOver = true;
+        worldState.highScore = Math.max(worldState.highScore, worldState.totalKills);
+        localStorage.setItem("baseDefenseHighScore", String(worldState.highScore));
+        gameOverKillsEl.textContent = `Kills: ${worldState.totalKills}`;
+        gameOverHighScoreEl.textContent = `High Score: ${worldState.highScore}`;
+        gameOverModalEl.classList.remove("hidden");
+      }
     }
   }
 
@@ -5233,6 +7140,8 @@ turrets.forEach((turret, index) => {
 });
 setPlayerWeapon("glock");
 applyPhaseVisuals(worldState.phase);
+updateCarriedLogsVisual();
+resetHarvestTrees(HARVEST_TREE_MAX_GROWTH_STAGE);
 initShopUi();
 updateShopUi();
 setShopModalOpen(false);

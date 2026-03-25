@@ -101,8 +101,9 @@ woodHudEl.id = "woodHud";
 woodHudEl.style.color = "#f6e6c8";
 woodHudEl.style.font = "700 12px Inter, system-ui, sans-serif";
 woodHudEl.style.pointerEvents = "none";
-woodHudEl.style.whiteSpace = "nowrap";
-woodHudEl.textContent = "Wood: 0 | Stone: 0 | Backpack: 0/20";
+woodHudEl.style.whiteSpace = "pre-line";
+woodHudEl.style.lineHeight = "1.25";
+woodHudEl.textContent = "Wood: 0\nStone: 0\nBackpack: 0/20";
 
 const breachAlertBannerEl = document.createElement("div");
 breachAlertBannerEl.id = "breachAlertBanner";
@@ -141,7 +142,7 @@ nightTimerEl.textContent = "Night in 90s";
 ultimateStatusEl.textContent = "Ultimate: No targets";
 creditsTextEl.textContent = "Credits: 0";
 ammoTextEl.textContent = "Ammo: 14 / 14";
-woodHudEl.textContent = "Wood: 0 | Stone: 0 | Backpack: 0/20";
+woodHudEl.textContent = "Wood: 0\nStone: 0\nBackpack: 0/20";
 
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
@@ -507,6 +508,7 @@ let playerWeaponRecoil = 0;
 const playerMuzzleFlashWorldPos = new THREE.Vector3();
 const turretMuzzleWorldPos = new THREE.Vector3();
 const MAX_CARRIED_LOGS = 20;
+const BACKPACK_CAPACITY_BY_LEVEL = { 1: 20, 2: 30, 3: 40 };
 const HARVEST_TREE_MAX_GROWTH_STAGE = 5;
 const HARVEST_TREE_COUNT = 0;
 const HARVEST_TREE_INTERACT_RANGE = 22;
@@ -660,72 +662,155 @@ function createUltimateBunkerHatch() {
 const ultimateBunkerHatch = createUltimateBunkerHatch();
 scene.add(ultimateBunkerHatch.group);
 
-const breachSirenLight = new THREE.PointLight(0xff3344, 0, 120, 2);
-breachSirenLight.position.set(ULT_BUNKER_POSITION.x, ULT_BUNKER_HOUSE_HEIGHT + 9, ULT_BUNKER_POSITION.z);
-scene.add(breachSirenLight);
-
-function createBreachSirenBeacon() {
+function createBreachSirenBeacons() {
   const group = new THREE.Group();
-  group.position.set(
-    ULT_BUNKER_POSITION.x,
-    ULT_BUNKER_HOUSE_HEIGHT + 6.8,
-    ULT_BUNKER_POSITION.z + ULT_BUNKER_HOUSE_RADIUS - 0.45
-  );
 
-  const base = new THREE.Mesh(
-    new THREE.CylinderGeometry(1.6, 1.85, 0.52, 16),
-    new THREE.MeshStandardMaterial({ color: 0x3b4048, roughness: 0.42, metalness: 0.78 })
-  );
-  base.castShadow = true;
-  base.receiveShadow = true;
-  group.add(base);
+  const doorY = 11.1;
+  const sideMountX = 9.15;
+  const sideMountZ = ULT_BUNKER_HOUSE_RADIUS - 0.74;
+  const frontBackX = 3.2;
+  const frontMountZ = ULT_BUNKER_HOUSE_RADIUS - 0.74;
+  const backMountZ = -(ULT_BUNKER_HOUSE_RADIUS - 0.74);
 
-  const rotator = new THREE.Group();
-  rotator.position.y = 0.42;
-  group.add(rotator);
+  const placements = [
+    { x: sideMountX, y: doorY, z: sideMountZ, yaw: Math.PI * 0.5 },
+    { x: -sideMountX, y: doorY, z: sideMountZ, yaw: -Math.PI * 0.5 },
+    { x: frontBackX, y: doorY, z: frontMountZ, yaw: 0 },
+    { x: frontBackX, y: doorY, z: backMountZ, yaw: Math.PI },
+  ];
 
-  const bar = new THREE.Mesh(
-    new THREE.BoxGeometry(3.4, 0.18, 0.62),
-    new THREE.MeshStandardMaterial({ color: 0x9aa3b0, roughness: 0.32, metalness: 0.88 })
-  );
-  bar.castShadow = true;
-  rotator.add(bar);
+  const units = placements.map((placement) => {
+    const unit = new THREE.Group();
+    unit.position.set(placement.x, placement.y, placement.z);
+    unit.rotation.y = placement.yaw;
+    group.add(unit);
 
-  const redLensMat = new THREE.MeshStandardMaterial({
-    color: 0xff4040,
-    emissive: 0x3b0606,
-    emissiveIntensity: 0.3,
-    transparent: true,
-    opacity: 0.94,
-    roughness: 0.22,
-    metalness: 0.12,
+    const wallBracket = new THREE.Mesh(
+      new THREE.BoxGeometry(0.44, 1.15, 0.5),
+      new THREE.MeshStandardMaterial({ color: 0x313841, roughness: 0.46, metalness: 0.76 })
+    );
+    wallBracket.position.set(0, 0.62, 0.16);
+    wallBracket.castShadow = true;
+    wallBracket.receiveShadow = true;
+    unit.add(wallBracket);
+
+    const arm = new THREE.Mesh(
+      new THREE.BoxGeometry(0.4, 0.2, 1.95),
+      new THREE.MeshStandardMaterial({ color: 0x737e8e, roughness: 0.4, metalness: 0.8 })
+    );
+    arm.position.set(0, 0.96, -0.72);
+    arm.castShadow = true;
+    arm.receiveShadow = true;
+    unit.add(arm);
+
+    const hanger = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.08, 0.08, 0.66, 10),
+      new THREE.MeshStandardMaterial({ color: 0x8b95a2, roughness: 0.34, metalness: 0.84 })
+    );
+    hanger.position.set(0, 0.58, -1.42);
+    hanger.castShadow = true;
+    unit.add(hanger);
+
+    const base = new THREE.Mesh(
+      new THREE.CylinderGeometry(1.35, 1.58, 0.48, 16),
+      new THREE.MeshStandardMaterial({ color: 0x3b4048, roughness: 0.42, metalness: 0.78 })
+    );
+    base.position.set(0, 0.22, -1.42);
+    base.castShadow = true;
+    base.receiveShadow = true;
+    unit.add(base);
+
+    const rotator = new THREE.Group();
+    rotator.position.set(0, 0.52, -1.42);
+    unit.add(rotator);
+
+    const bar = new THREE.Mesh(
+      new THREE.BoxGeometry(2.85, 0.18, 0.56),
+      new THREE.MeshStandardMaterial({ color: 0x9aa3b0, roughness: 0.32, metalness: 0.88 })
+    );
+    bar.castShadow = true;
+    rotator.add(bar);
+
+    const redLensMat = new THREE.MeshStandardMaterial({
+      color: 0xff4040,
+      emissive: 0x3b0606,
+      emissiveIntensity: 0.32,
+      transparent: true,
+      opacity: 0.95,
+      roughness: 0.2,
+      metalness: 0.12,
+    });
+    const blueLensMat = new THREE.MeshStandardMaterial({
+      color: 0x3d68ff,
+      emissive: 0x07113b,
+      emissiveIntensity: 0.32,
+      transparent: true,
+      opacity: 0.95,
+      roughness: 0.2,
+      metalness: 0.12,
+    });
+
+    const redLens = new THREE.Mesh(new THREE.SphereGeometry(0.52, 16, 12), redLensMat);
+    redLens.scale.set(1, 0.68, 1);
+    redLens.position.set(-0.84, 0.3, 0);
+    redLens.castShadow = true;
+    rotator.add(redLens);
+
+    const blueLens = new THREE.Mesh(new THREE.SphereGeometry(0.52, 16, 12), blueLensMat);
+    blueLens.scale.set(1, 0.68, 1);
+    blueLens.position.set(0.84, 0.3, 0);
+    blueLens.castShadow = true;
+    rotator.add(blueLens);
+
+    const glassCover = new THREE.Mesh(
+      new THREE.SphereGeometry(1.5, 20, 14, 0, Math.PI * 2, 0, Math.PI * 0.62),
+      new THREE.MeshPhysicalMaterial({
+        color: 0xd9f3ff,
+        transparent: true,
+        opacity: 0.28,
+        roughness: 0.06,
+        metalness: 0,
+        transmission: 0.88,
+        thickness: 0.18,
+        clearcoat: 1,
+        clearcoatRoughness: 0.08,
+      })
+    );
+    glassCover.position.set(0, 0.44, 0);
+    glassCover.rotation.x = Math.PI;
+    glassCover.castShadow = true;
+    glassCover.receiveShadow = true;
+    unit.add(glassCover);
+
+    const redBeamTarget = new THREE.Object3D();
+    redBeamTarget.position.set(-0.84, 0.26, -28);
+    rotator.add(redBeamTarget);
+    const redBeam = new THREE.SpotLight(0xff3f3f, 0, 155, 0.34, 0.45, 0.85);
+    redBeam.position.set(-0.84, 0.3, 0);
+    redBeam.target = redBeamTarget;
+    redBeam.castShadow = false;
+    rotator.add(redBeam);
+
+    const blueBeamTarget = new THREE.Object3D();
+    blueBeamTarget.position.set(0.84, 0.26, 28);
+    rotator.add(blueBeamTarget);
+    const blueBeam = new THREE.SpotLight(0x3d68ff, 0, 155, 0.34, 0.45, 0.85);
+    blueBeam.position.set(0.84, 0.3, 0);
+    blueBeam.target = blueBeamTarget;
+    blueBeam.castShadow = false;
+    rotator.add(blueBeam);
+
+    const pointLight = new THREE.PointLight(0xff3344, 0, 165, 1.65);
+    pointLight.position.set(0, 0.66, -1.42);
+    unit.add(pointLight);
+    return { rotator, redLensMat, blueLensMat, redBeam, blueBeam, pointLight };
   });
-  const blueLensMat = new THREE.MeshStandardMaterial({
-    color: 0x3d68ff,
-    emissive: 0x07113b,
-    emissiveIntensity: 0.3,
-    transparent: true,
-    opacity: 0.94,
-    roughness: 0.22,
-    metalness: 0.12,
-  });
 
-  const redLens = new THREE.Mesh(new THREE.SphereGeometry(0.56, 16, 12), redLensMat);
-  redLens.scale.set(1, 0.7, 1);
-  redLens.position.set(-1.02, 0.34, 0);
-  redLens.castShadow = true;
-  rotator.add(redLens);
-
-  const blueLens = new THREE.Mesh(new THREE.SphereGeometry(0.56, 16, 12), blueLensMat);
-  blueLens.scale.set(1, 0.7, 1);
-  blueLens.position.set(1.02, 0.34, 0);
-  blueLens.castShadow = true;
-  rotator.add(blueLens);
-
-  return { group, rotator, redLensMat, blueLensMat };
+  group.position.set(ULT_BUNKER_POSITION.x, 0, ULT_BUNKER_POSITION.z);
+  return { group, units };
 }
 
-const breachSirenBeacon = createBreachSirenBeacon();
+const breachSirenBeacon = createBreachSirenBeacons();
 scene.add(breachSirenBeacon.group);
 
 function setUltimateBunkerHatchOpen(openAmount) {
@@ -1209,30 +1294,30 @@ function createLevel5TurretMesh() {
 function createLevel6TurretMesh() {
   const turretGroup = createLevel5TurretMesh();
 
-  const flakTopMount = new THREE.Mesh(
-    new THREE.BoxGeometry(6.2, 1.2, 4.8),
-    new THREE.MeshStandardMaterial({ color: TURRET_COLOR_CAMO_DARK, roughness: 0.56, metalness: 0.2 })
-  );
-  flakTopMount.position.set(0, 8.0, -1.2);
-  flakTopMount.castShadow = true;
-  turretGroup.add(flakTopMount);
+  const topFlakRotator = new THREE.Group();
+  topFlakRotator.position.set(0, 8.15, -4.25);
+  turretGroup.add(topFlakRotator);
 
-  const topFlakGroup = new THREE.Group();
-  topFlakGroup.position.set(0, 8.1, -5.6);
-  turretGroup.add(topFlakGroup);
-
-  [-1.25, 1.25].forEach((offsetX) => {
-    const barrel = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.52, 0.52, 7.6, 10),
-      new THREE.MeshStandardMaterial({ color: TURRET_COLOR_DARK_STEEL, roughness: 0.38, metalness: 0.64 })
-    );
-    barrel.rotation.x = Math.PI / 2;
-    barrel.position.set(offsetX, 0, -3.8);
-    barrel.castShadow = true;
-    topFlakGroup.add(barrel);
+  // Reuse the regular flak turret model so the compound top weapon stays cohesive.
+  const mountedFlak = createLevel3TurretMesh();
+  mountedFlak.scale.setScalar(0.46);
+  mountedFlak.rotation.y = 0;
+  mountedFlak.traverse((node) => {
+    if (node.isMesh) {
+      node.castShadow = true;
+      node.receiveShadow = true;
+    }
   });
 
-  turretGroup.userData.mountedRotator = topFlakGroup;
+  // Normalize local pivot so the mounted flak sits centered on the cannon axis.
+  const flakBounds = new THREE.Box3().setFromObject(mountedFlak);
+  const flakCenter = new THREE.Vector3();
+  flakBounds.getCenter(flakCenter);
+  mountedFlak.position.set(-flakCenter.x, -flakBounds.min.y, -flakCenter.z);
+
+  topFlakRotator.add(mountedFlak);
+
+  turretGroup.userData.mountedRotator = topFlakRotator;
 
   return turretGroup;
 }
@@ -1559,6 +1644,10 @@ const attachments = [
 const pickupPullUpgrades = [
   { level: 1, multiplier: 2, cost: 500 },
   { level: 2, multiplier: 4, cost: 1000 },
+];
+const backpackUpgrades = [
+  { level: 2, capacity: 30, cost: 500 },
+  { level: 3, capacity: 40, cost: 1000 },
 ];
 const repairs = [
   { id: "repair250", name: "Repair +250 HP", hp: 250, cost: 250 },
@@ -3102,6 +3191,8 @@ function spawnDroppedHarvestLogPickup(tree, despawnCycles = HARVEST_LOG_DESPAWN_
     bobPhase: Math.random() * Math.PI * 2,
     baseY: 1.25,
     magnetized: false,
+    isDropping: false,
+    dropVelocityY: 0,
   });
 }
 
@@ -3144,9 +3235,10 @@ function spawnCreditPickup(x, z, amount) {
 function finalizeHarvestedTree(tree, options = {}) {
   const autoCollect = options.autoCollect !== false;
   const dropPickupCycles = options.dropPickupCycles || 0;
+  const backpackCapacity = getBackpackCapacity();
 
-  if (autoCollect && worldState.carriedLogs < MAX_CARRIED_LOGS) {
-    const canAdd = Math.min(MAX_CARRIED_LOGS - worldState.carriedLogs, tree.woodYield || 1);
+  if (autoCollect && worldState.carriedLogs < backpackCapacity) {
+    const canAdd = Math.min(backpackCapacity - worldState.carriedLogs, tree.woodYield || 1);
     worldState.carriedLogs += canAdd;
     updateCarriedLogsVisual();
   } else if (!autoCollect && dropPickupCycles > 0) {
@@ -3203,7 +3295,7 @@ function performTreeChop(tree) {
   if (!tree) {
     return;
   }
-  if (worldState.carriedLogs >= MAX_CARRIED_LOGS) {
+  if (worldState.carriedLogs >= getBackpackCapacity()) {
     if (playerAxeState.fullAlertCooldown <= 0) {
       showPlayerSpeechBubble("I'm full", 1.1);
       playerAxeState.fullAlertCooldown = 1.1;
@@ -3406,6 +3498,13 @@ function knockdownHarvestTreeByCannon(tree, shotDirX = 0, shotDirZ = 0) {
 
 function updateDroppedHarvestLogs(dt) {
   const pullMultiplier = worldState.pickupPullMultiplier || 1;
+  const backpackCapacity = getBackpackCapacity();
+  const releasePickupFromMagnet = (pickup) => {
+    pickup.magnetized = false;
+    pickup.isDropping = true;
+    pickup.dropVelocityY = Math.min(pickup.dropVelocityY || 0, -8);
+  };
+
   for (let index = droppedHarvestLogs.length - 1; index >= 0; index -= 1) {
     const pickup = droppedHarvestLogs[index];
     if (worldState.growthCycleCount - pickup.spawnCycle >= pickup.despawnCycles) {
@@ -3418,7 +3517,16 @@ function updateDroppedHarvestLogs(dt) {
 
     pickup.bobPhase += dt * 3.2;
     pickup.baseY = getEffectFloorY(pickup.mesh.position.x, pickup.mesh.position.z) + 1.25;
-    if (!pickup.magnetized) {
+
+    if (pickup.isDropping) {
+      pickup.dropVelocityY -= 170 * dt;
+      pickup.mesh.position.y += pickup.dropVelocityY * dt;
+      if (pickup.mesh.position.y <= pickup.baseY) {
+        pickup.mesh.position.y = pickup.baseY;
+        pickup.isDropping = false;
+        pickup.dropVelocityY = 0;
+      }
+    } else if (!pickup.magnetized) {
       pickup.mesh.position.y = pickup.baseY + Math.sin(pickup.bobPhase) * 0.14;
     }
     pickup.mesh.rotation.x = Math.sin(pickup.bobPhase * 0.75) * 0.08;
@@ -3428,12 +3536,13 @@ function updateDroppedHarvestLogs(dt) {
     }
 
     const distance = Math.hypot(pickup.mesh.position.x - player.x, pickup.mesh.position.z - player.z);
-    if (worldState.carriedLogs >= MAX_CARRIED_LOGS) {
-      continue;
-    }
+    const canCarryMoreLogs = worldState.carriedLogs < backpackCapacity;
+    const inMagnetRange = distance <= HARVEST_LOG_MAGNET_RANGE * pullMultiplier;
 
-    if (distance <= HARVEST_LOG_MAGNET_RANGE * pullMultiplier) {
+    if (canCarryMoreLogs && inMagnetRange) {
       pickup.magnetized = true;
+      pickup.isDropping = false;
+      pickup.dropVelocityY = 0;
       const dx = player.x - pickup.mesh.position.x;
       const dz = player.z - pickup.mesh.position.z;
       const len = Math.hypot(dx, dz) || 1;
@@ -3443,13 +3552,20 @@ function updateDroppedHarvestLogs(dt) {
       const targetY = PLAYER_VISUAL_Y * 0.62;
       pickup.mesh.position.y += (targetY - pickup.mesh.position.y) * Math.min(1, dt * 8.5);
       pickup.mesh.rotation.y += dt * 7.5;
+    } else if (pickup.magnetized) {
+      // If suction can no longer continue, release and let it fall naturally.
+      releasePickupFromMagnet(pickup);
+    }
+
+    if (!canCarryMoreLogs) {
+      continue;
     }
 
     if (distance > HARVEST_LOG_PICKUP_RANGE) {
       continue;
     }
 
-    const canTake = Math.min(MAX_CARRIED_LOGS - worldState.carriedLogs, pickup.woodAmount);
+    const canTake = Math.min(backpackCapacity - worldState.carriedLogs, pickup.woodAmount);
     if (canTake <= 0) {
       continue;
     }
@@ -3916,21 +4032,31 @@ function closeBreach() {
 
 function updateBreachEffects(nowSeconds) {
   if (!worldState.breach.active) {
-    breachSirenLight.intensity = 0;
     breachAlertBannerEl.style.display = "none";
-    breachSirenBeacon.redLensMat.emissiveIntensity = 0.22;
-    breachSirenBeacon.blueLensMat.emissiveIntensity = 0.22;
+    breachSirenBeacon.units.forEach((unit) => {
+      unit.pointLight.intensity = 0;
+      unit.redLensMat.emissiveIntensity = 0.22;
+      unit.blueLensMat.emissiveIntensity = 0.22;
+      unit.redBeam.intensity = 0;
+      unit.blueBeam.intensity = 0;
+    });
     return;
   }
   ensureBreachAlertSprite();
   breachAlertBannerEl.style.display = "block";
 
   const pulse = (Math.sin(nowSeconds * 12) + 1) * 0.5;
-  breachSirenLight.intensity = 1.8 + pulse * 2.2;
-  breachSirenLight.color.setHex(pulse > 0.5 ? 0xff3344 : 0x3377ff);
-  breachSirenBeacon.rotator.rotation.y = nowSeconds * 8;
-  breachSirenBeacon.redLensMat.emissiveIntensity = 0.35 + pulse * 1.95;
-  breachSirenBeacon.blueLensMat.emissiveIntensity = 0.35 + (1 - pulse) * 1.95;
+  breachSirenBeacon.units.forEach((unit, index) => {
+    const phaseOffset = index * (Math.PI * 0.5);
+    const localPulse = (Math.sin(nowSeconds * 12 + phaseOffset) + 1) * 0.5;
+    unit.rotator.rotation.y = nowSeconds * 8;
+    unit.redLensMat.emissiveIntensity = 0.38 + localPulse * 2.5;
+    unit.blueLensMat.emissiveIntensity = 0.38 + (1 - localPulse) * 2.5;
+    unit.redBeam.intensity = 26 + localPulse * 46;
+    unit.blueBeam.intensity = 26 + (1 - localPulse) * 46;
+    unit.pointLight.intensity = 8 + localPulse * 14;
+    unit.pointLight.color.setHex(localPulse > 0.5 ? 0xff3344 : 0x3377ff);
+  });
   breachAlertBannerEl.style.opacity = `${0.72 + pulse * 0.28}`;
   breachAlertBannerEl.style.transform = `translateX(-50%) scale(${1 + pulse * 0.025})`;
 }
@@ -4035,6 +4161,7 @@ const worldState = {
   activeShopTab: "player",
   pickupPullLevel: 0,
   pickupPullMultiplier: 1,
+  backpackLevel: 1,
   breach: {
     active: false,
     openingIndex: -1,
@@ -4286,6 +4413,27 @@ function buyPickupPullUpgrade(level) {
   worldState.pickupPullMultiplier = upgrade.multiplier;
 }
 
+function getBackpackCapacity() {
+  return BACKPACK_CAPACITY_BY_LEVEL[worldState.backpackLevel] || MAX_CARRIED_LOGS;
+}
+
+function buyBackpackUpgrade(level) {
+  const upgrade = backpackUpgrades.find((item) => item.level === level);
+  if (!upgrade) {
+    return;
+  }
+  if (worldState.backpackLevel !== level - 1) {
+    return;
+  }
+  if (!worldState.devMode && worldState.credits < upgrade.cost) {
+    return;
+  }
+  if (!worldState.devMode) {
+    worldState.credits -= upgrade.cost;
+  }
+  worldState.backpackLevel = level;
+}
+
 function buyRepair(repairId) {
   const repair = repairs.find((item) => item.id === repairId);
   if (!repair) {
@@ -4469,6 +4617,17 @@ function initShopUi() {
     shopAttachmentListEl.appendChild(button);
   });
 
+  backpackUpgrades.forEach((upgrade) => {
+    const button = document.createElement("button");
+    button.className = "shop-btn";
+    button.dataset.backpackUpgradeLevel = String(upgrade.level);
+    button.addEventListener("click", () => {
+      buyBackpackUpgrade(upgrade.level);
+      updateShopUi();
+    });
+    shopAttachmentListEl.appendChild(button);
+  });
+
   repairs.forEach((repair) => {
     const button = document.createElement("button");
     button.className = "shop-btn";
@@ -4555,6 +4714,25 @@ function updateShopUi() {
       ? `Pickup Pull x${upgrade.multiplier} · Owned`
       : `Pickup Pull x${upgrade.multiplier} · Buy ${upgrade.cost}`;
     setShopButtonContent(button, label, "", "🧲");
+  });
+
+  shopAttachmentListEl.querySelectorAll("[data-backpack-upgrade-level]").forEach((button) => {
+    const level = Number(button.dataset.backpackUpgradeLevel);
+    const upgrade = backpackUpgrades.find((item) => item.level === level);
+    if (!upgrade) {
+      return;
+    }
+
+    const owned = worldState.backpackLevel >= level;
+    const canBuy =
+      worldState.backpackLevel === level - 1 &&
+      (worldState.devMode || worldState.credits >= upgrade.cost);
+    button.disabled = !owned && !canBuy;
+
+    const label = owned
+      ? `Backpack Lv${level} (${upgrade.capacity}) · Owned`
+      : `Backpack Lv${level} (${upgrade.capacity}) · Buy ${upgrade.cost}`;
+    setShopButtonContent(button, label, "", "🎒");
   });
 
   shopRepairListEl.querySelectorAll(".shop-btn").forEach((button) => {
@@ -7093,9 +7271,15 @@ function updateHud() {
   const nearBunkerForDrop =
     worldState.carriedLogs > 0 &&
     Math.hypot(player.x - ULT_BUNKER_POSITION.x, player.z - ULT_BUNKER_POSITION.z) <= ULT_BUNKER_HOUSE_RADIUS + 18;
-  const actionHint = nearBunkerForDrop ? " | Auto unloading..." : "";
-  const breachHint = worldState.breach.active ? " | BREACH!" : "";
-  woodHudEl.textContent = `Wood: ${worldState.woodStock} | Stone: ${worldState.stoneStock} | Backpack: ${worldState.carriedLogs}/${MAX_CARRIED_LOGS}${actionHint}${breachHint}`;
+  const hudStatusLines = [];
+  if (nearBunkerForDrop) {
+    hudStatusLines.push("Auto unloading...");
+  }
+  if (worldState.breach.active) {
+    hudStatusLines.push("BREACH!");
+  }
+  const statusBlock = hudStatusLines.length > 0 ? `\n${hudStatusLines.join("\n")}` : "";
+  woodHudEl.textContent = `Wood: ${worldState.woodStock}\nStone: ${worldState.stoneStock}\nBackpack: ${worldState.carriedLogs}/${getBackpackCapacity()}${statusBlock}`;
 }
 
 function setPaused(value) {
@@ -7251,6 +7435,7 @@ function resetPrototype() {
   worldState.ownedAttachments = new Set();
   worldState.pickupPullLevel = 0;
   worldState.pickupPullMultiplier = 1;
+  worldState.backpackLevel = 1;
   worldState.baseUpgradeLevel = 0;
   closeBreach();
   worldState.breach.lastHitSegmentIndex = -1;

@@ -160,12 +160,25 @@ body {
   left: 12px;
   z-index: 5;
   display: flex;
-  align-items: center;
-  gap: 8px;
+  flex-direction: column !important;
+  justify-content: flex-start;
+  align-items: flex-start;
+  text-align: left;
+  gap: 6px;
   padding: 6px 10px;
   border: 1px solid rgba(142, 166, 206, 0.65);
   border-radius: 6px;
   background: rgba(10, 18, 30, 0.78);
+}
+
+.canvas-credits-hud .util-btn {
+  align-self: flex-start;
+}
+
+.canvas-credits-hud #creditsText,
+.canvas-credits-hud #woodHud {
+  white-space: pre-line;
+  line-height: 1.25;
 }
 
 
@@ -480,8 +493,13 @@ main {
 
 .shop-list {
   display: flex;
+  flex-direction: column;
+  align-items: stretch;
   gap: 8px;
-  flex-wrap: wrap;
+}
+
+.shop-list .shop-btn {
+  width: 100%;
 }
 
 .shop-btn {
@@ -613,41 +631,16 @@ main {
 }
 
 .shop-turret-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  grid-template-areas:
-    ". north ."
-    "west center east"
-    ". south .";
+  display: flex;
+  flex-direction: column;
   gap: 10px;
-  align-items: stretch;
 }
 
 .shop-turret-grid .shop-btn {
   width: 100%;
-  min-height: 132px;
+  min-height: 116px;
   padding: 8px;
   text-align: left;
-}
-
-.shop-turret-grid .shop-btn[data-slot="north"] {
-  grid-area: north;
-}
-
-.shop-turret-grid .shop-btn[data-slot="south"] {
-  grid-area: south;
-}
-
-.shop-turret-grid .shop-btn[data-slot="west"] {
-  grid-area: west;
-}
-
-.shop-turret-grid .shop-btn[data-slot="east"] {
-  grid-area: east;
-}
-
-.shop-turret-grid .shop-btn[data-slot="center"] {
-  grid-area: center;
 }
 
 .turret-card {
